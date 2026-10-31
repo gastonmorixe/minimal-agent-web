@@ -1,0 +1,18 @@
+data: {"type":"start","messageId":"msg-error"}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-start","id":"1:text"}
+
+data: {"type":"text-delta","id":"1:text","delta":"Working on"}
+
+data: {"type":"text-end","id":"1:text"}
+
+data: {"type":"error","errorText":"The provider rejected the credential.\nLog in again."}
+
+data: {"type":"finish-step"}
+
+data: {"type":"finish","finishReason":"error"}
+
+data: [DONE]
+

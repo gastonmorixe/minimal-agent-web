@@ -1,0 +1,36 @@
+data: {"type":"start","messageId":"msg-buffered"}
+
+data: {"type":"start-step"}
+
+data: {"type":"reasoning-start","id":"1:0"}
+
+data: {"type":"reasoning-delta","id":"1:0","delta":"Plan the list."}
+
+data: {"type":"reasoning-end","id":"1:0"}
+
+data: {"type":"text-start","id":"1:1"}
+
+data: {"type":"text-delta","id":"1:1","delta":"1. Install"}
+
+data: {"type":"text-end","id":"1:1"}
+
+data: {"type":"data-notice","data":{"kind":"max_tokens_continuing","severity":"warn","attempt":1,"cap":5}}
+
+data: {"type":"finish-step"}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-start","id":"2:0"}
+
+data: {"type":"text-delta","id":"2:0","delta":"\n2. Run"}
+
+data: {"type":"text-end","id":"2:0"}
+
+data: {"type":"data-usage","data":{"kind":"turn","turn":2,"usage":{"inputTokens":70,"outputTokens":5}}}
+
+data: {"type":"finish-step"}
+
+data: {"type":"finish","finishReason":"stop"}
+
+data: [DONE]
+

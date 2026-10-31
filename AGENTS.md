@@ -6,8 +6,9 @@
 
 ```
 server/   Bun. Bun.serve on 127.0.0.1. Imports only @minimal-agent/core public exports.
+  src/chat-stream/   Core events to AI SDK UI message stream parts (spec 4.3), SSE encoding, goldens.
   src/architecture/  Boundary and dependency tests.
-  src/server.ts      Serves the built app. The session API (spec 4.2) comes next.
+  src/server.ts      Serves the built app and a demo chat route. The session API (spec 4.2) comes next.
 app/      Vite + React 19 + Tailwind 4 + shadcn/ui + AI Elements. Built to static files in app/dist.
   src/components/ui/ shadcn/ui registry components (shadcn CLI output).
   src/spike/         Build spike: every AI Element from spec 4.4 on one page.
@@ -22,7 +23,7 @@ The server imports core only through the subpaths in core's package `exports` ma
 ## Dependencies
 
 - `server` has one runtime dependency, `@minimal-agent/core`. It installs from a `git+ssh` URL pinned to a full commit SHA or a release tag, never a branch. Keep the `git+ssh` form: Bun turns `git+https://github.com/...` into a GitHub API tarball download that ignores git credentials. To bump core, change the SHA in `server/package.json` and run `bun install`.
-- The server produces the chat stream without the AI SDK (D24). Server code never loads `ai` at runtime. The boundary test enforces this.
+- The server produces the chat stream without the AI SDK (D24). `ai` is a server dev dependency: source files may `import type` from it, and tests may use it to check the stream. Server code never loads it at runtime. The boundary test enforces this.
 - The app may use npm dependencies (D25): React, shadcn/ui, the AI SDK UI packages.
 - CI: all repos are private, and the Actions token reads only this repo. CI clones core with a read-only deploy key on minimal-agent-core, whose private half is the `CORE_DEPLOY_KEY` secret here. The workflow pins GitHub's published SSH host key and routes Bun's `https://git@github.com/` clone to SSH. Until the secret exists, CI fails at the "Allow reading private core" step.
 
@@ -45,6 +46,15 @@ AI Elements come from the shadcn/ui registry (D23, `ui.shadcn.com/docs/ai-elemen
 - Add components from `app/` with the shadcn CLI: `bunx shadcn@latest add <name>`, then `bun run format`.
 - Build each pattern from its page (`ui.shadcn.com/docs/ai-elements/radix/<name>.md`). Never hand-invent a component and call it an AI Element.
 - `app/src/components/ui`, `app/src/hooks`, `app/src/lib`, and `app/src/components/theme-provider.tsx` are registry and template code. Keep them as the CLI writes them (Biome formatting aside), so they can be refreshed with `shadcn add --overwrite`. `.oxlintrc.json` relaxes the doc-comment rules and four lint rules for these paths only.
+
+## Chat stream
+
+`server/src/chat-stream/adapter.ts` maps core events to UI message stream parts as a pure reducer. Its module comment has the mapping table. `sse.ts` writes the parts as SSE (`data: <json>`, then `data: [DONE]`) with the `x-vercel-ai-ui-message-stream: v1` header.
+
+- Part shapes come from the `ai` package types. `chunks.ts` holds a local copy, and `ai-sdk-compat.test.ts` checks it against `ai` at compile time and decodes every golden through `DefaultChatTransport` and `readUIMessageStream`.
+- When core adds an event kind, typecheck fails at the `never` check in `mapAgentEvent` until you add its case.
+- Goldens: `golden-runs.ts` holds the event sequences, and `goldens/<name>.sse` holds the expected SSE text. After an intended change, run `UPDATE_GOLDENS=1 bun test server/src/chat-stream` and review the diff.
+- Diagnostics never go into the chat stream (spec 4.3). They belong to the event log and the trace view.
 
 ## Quality gate
 

@@ -4,7 +4,8 @@ import { join } from "node:path"
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 
-import { startServer } from "./server.ts"
+import { UI_MESSAGE_STREAM_HEADERS } from "./chat-stream/chunks.ts"
+import { DEMO_CHAT_PATH, startServer } from "./server.ts"
 
 let appDir: string
 let server: ReturnType<typeof startServer>
@@ -54,5 +55,16 @@ describe("startServer", () => {
   test("answers unknown API paths with 404", async () => {
     const response = await get("/api/nope")
     expect(response.status).toBe(404)
+  })
+
+  test("streams the demo run as a UI message stream", async () => {
+    const response = await get(DEMO_CHAT_PATH, { method: "POST", body: "{}" })
+    expect(response.status).toBe(200)
+    for (const [name, value] of Object.entries(UI_MESSAGE_STREAM_HEADERS)) {
+      expect(response.headers.get(name)).toBe(value)
+    }
+    const body = await response.text()
+    expect(body.startsWith('data: {"type":"start"')).toBe(true)
+    expect(body.endsWith("data: [DONE]\n\n")).toBe(true)
   })
 })
