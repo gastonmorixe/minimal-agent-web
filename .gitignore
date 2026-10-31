@@ -1,0 +1,22 @@
+# dependencies
+node_modules/
+
+# generated output
+dist/
+coverage/
+tmp/
+*.log
+*.tsbuildinfo
+
+# private / local-only
+private/
+research/
+work/
+PROGRESS.md
+.swarm/
+*.local
+
+# editor / OS
+.DS_Store
+*.swp
+*.swo
