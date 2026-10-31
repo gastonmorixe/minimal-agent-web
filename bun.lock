@@ -5,7 +5,7 @@
     "": {
       "name": "minimal-agent-web",
       "dependencies": {
-        "@minimal-agent/core": "git+ssh://git@github.com/gastonmorixe/minimal-agent-core.git#bcfe1b3fbd37884b92595937164d618eb069a2b7",
+        "@minimal-agent/core": "git+ssh://git@github.com/gastonmorixe/minimal-agent-core.git#65b832d15fd03f83c3cd75808dbd0b7b75f1fc6f",
       },
       "devDependencies": {
         "@biomejs/biome": "^2.5.15",
@@ -254,7 +254,7 @@
 
     "@minimal-agent-web/server": ["@minimal-agent-web/server@workspace:server"],
 
-    "@minimal-agent/core": ["@minimal-agent/core@git+ssh://git@github.com/gastonmorixe/minimal-agent-core.git#bcfe1b3fbd37884b92595937164d618eb069a2b7", { "bin": { "minimal-agent": "src/index.ts" } }, "bcfe1b3fbd37884b92595937164d618eb069a2b7"],
+    "@minimal-agent/core": ["@minimal-agent/core@git+ssh://git@github.com/gastonmorixe/minimal-agent-core.git#65b832d15fd03f83c3cd75808dbd0b7b75f1fc6f", { "bin": { "minimal-agent": "src/index.ts" } }, "65b832d15fd03f83c3cd75808dbd0b7b75f1fc6f"],
 
     "@modelcontextprotocol/core": ["@modelcontextprotocol/core@2.4.0", "", { "dependencies": { "zod": "^4.2.0" } }, "sha512-z8QBKqdfXLPzkLQuG4xp8hrVEMm1PZ1IgxMN2sMbJiFiAKOWXnAzogXn2W4aqIBlP1ea6U5yiqVquvUNM1Cj6Q=="],
 
