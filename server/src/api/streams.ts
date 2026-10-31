@@ -7,10 +7,11 @@
  * @module api/streams
  */
 
+import { type SessionEntry, serializeEntrySse } from "@minimal-agent/core"
+
 import type { SessionBackend, TurnHandle } from "../backend/backend.ts"
 import { UI_MESSAGE_STREAM_HEADERS } from "../chat-stream/chunks.ts"
 import { ChatStreamEncoder } from "../chat-stream/sse.ts"
-import { type SessionEntry, serializeEntrySse } from "../core-mirror/session-entry.ts"
 
 /** Options the streams share. */
 export interface StreamOptions {
@@ -44,13 +45,24 @@ class SseWriter {
 
   write(text: string): void {
     if (this.closed || text.length === 0) return
-    this.controller.enqueue(this.encoder.encode(text))
+    try {
+      this.controller.enqueue(this.encoder.encode(text))
+    } catch {
+      // The underlying connection can die between a dropped client and this
+      // writer's own `cancel`/`abort` handler running (both async): treat a
+      // write to a controller Bun already tore down the same as `stop()`.
+      this.stop()
+    }
   }
 
   close(): void {
     if (this.closed) return
     this.stop()
-    this.controller.close()
+    try {
+      this.controller.close()
+    } catch {
+      // Already torn down from the other side; nothing left to close.
+    }
   }
 
   /** Stop without closing the controller: the consumer went away. */

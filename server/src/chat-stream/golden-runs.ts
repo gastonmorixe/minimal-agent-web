@@ -1,25 +1,31 @@
 /**
  * Golden runs for the chat stream adapter: core event sequences, in the order
- * today's `AgentCore.run` emits them.
+ * `AgentCore.run` emits them.
  *
  * The order follows `src/sdk/agent-core.ts` in core: `turn_started`, then the
  * live deltas (only with `emitDeltas`), then one `item_started` /
- * `item_completed` pair per content block, then notices, then `tool_result`
- * per executed tool, then `turn_completed`. A continuation (`max_tokens`)
- * starts the next turn without a `turn_completed`. `error` is terminal.
+ * `item_completed` pair per content block, then notices, then any
+ * `tool_call` / `tool_output` / `tool_result` per executed tool, then
+ * `turn_completed`. A continuation (`max_tokens`) starts the next turn
+ * without a `turn_completed`. `error` is terminal unless it is recoverable
+ * (`status` phase `waiting_for_host`, then `run_finished` with outcome
+ * `"waiting"` — the run is paused, not over). `run_finished` always ends a
+ * run.
+ *
+ * Shapes are core's real, exported `AgentEvent` (`@minimal-agent/core/sdk/events`).
+ * `TOOL_TURN` and `ASK_TURN` are still synthetic — today's sessions
+ * (`backend/runtime-backend.ts`) run with no `toolRegistry` and so never
+ * produce `tool_call` / `item_completed` tool_use / `tool_result`, and no
+ * scripted transport scenario triggers a real `ask_user` (see that file's
+ * "no tools" scope note). They exist to keep the adapter's mapping for
+ * those kinds under test regardless.
  *
  * Each run's expected SSE output is `goldens/<name>.sse`.
- *
- * The runs from APPROVAL_TURN on use the kinds core phase 3 adds, from the
- * mirror in `core-mirror/events.ts`. Their order is a guess until core
- * emits them: `tool_call`, `tool_output`, and `tool_result` per executed
- * tool, the approval ask between the `tool_use` item and the `tool_call`,
- * and `run_finished` last.
  *
  * @module chat-stream/golden-runs
  */
 
-import type { WebAgentEvent } from "../core-mirror/events.ts"
+import type { AgentEvent } from "@minimal-agent/core/sdk/events"
 
 import type { ChatStreamInput } from "./adapter.ts"
 
@@ -29,7 +35,7 @@ export interface GoldenRun {
   inputs: ChatStreamInput[]
 }
 
-function run(messageId: string, events: WebAgentEvent[]): ChatStreamInput[] {
+function run(messageId: string, events: AgentEvent[]): ChatStreamInput[] {
   return [
     { kind: "run_started", messageId },
     ...events.map((event): ChatStreamInput => ({ kind: "event", event })),
@@ -41,6 +47,7 @@ function run(messageId: string, events: WebAgentEvent[]): ChatStreamInput[] {
 const TEXT_TURN: GoldenRun = {
   name: "text-turn",
   inputs: run("msg-text", [
+    { type: "user_message", text: "Say hello." },
     { type: "turn_started", turn: 1 },
     { type: "text_delta", id: "1:text", text: "Hello" },
     { type: "text_delta", id: "1:text", text: ", world." },
@@ -52,6 +59,7 @@ const TEXT_TURN: GoldenRun = {
       stopReason: "end_turn",
       usage: { inputTokens: 12, outputTokens: 4 },
     },
+    { type: "run_finished", outcome: "completed" },
   ]),
 }
 
@@ -78,10 +86,11 @@ const REASONING_TURN: GoldenRun = {
       stopReason: "end_turn",
       usage: { inputTokens: 40, outputTokens: 18, cacheReadTokens: 32 },
     },
+    { type: "run_finished", outcome: "completed" },
   ]),
 }
 
-/** A tool round, then the final answer. */
+/** A tool round, then the final answer. Synthetic — see the module doc. */
 const TOOL_TURN: GoldenRun = {
   name: "tool-turn",
   inputs: run("msg-tool", [
@@ -89,9 +98,32 @@ const TOOL_TURN: GoldenRun = {
     { type: "text_delta", id: "1:text", text: "Let me read it." },
     { type: "item_started", itemType: "text", id: "1:0" },
     { type: "item_completed", itemType: "text", id: "1:0", text: "Let me read it." },
-    { type: "item_started", itemType: "tool_use", id: "toolu_01" },
+    { type: "item_started", itemType: "tool_use", id: "toolu_01", toolName: "Read" },
     { type: "item_completed", itemType: "tool_use", id: "toolu_01", text: "Read" },
-    { type: "tool_result", id: "toolu_01", name: "Read", isError: false },
+    {
+      type: "tool_call",
+      callId: "toolu_01",
+      toolName: "Read",
+      input: { path: "README.md" },
+      inputSummary: "README.md",
+    },
+    {
+      type: "tool_output",
+      callId: "toolu_01",
+      toolName: "Read",
+      text: "# demo\n",
+      truncated: false,
+      totalBytes: 7,
+    },
+    {
+      type: "tool_result",
+      id: "toolu_01",
+      name: "Read",
+      isError: false,
+      inputSummary: "README.md",
+      outputSummary: "3 lines",
+      durationMs: 12,
+    },
     {
       type: "turn_completed",
       turn: 1,
@@ -108,10 +140,76 @@ const TOOL_TURN: GoldenRun = {
       stopReason: "end_turn",
       usage: { inputTokens: 52, outputTokens: 7 },
     },
+    { type: "run_finished", outcome: "completed" },
   ]),
 }
 
-/** A provider error in the middle of a streamed reply. */
+/** A failed tool call. Synthetic — see the module doc. */
+const TOOL_ERROR_TURN: GoldenRun = {
+  name: "tool-error-turn",
+  inputs: run("msg-tool-error", [
+    { type: "turn_started", turn: 1 },
+    { type: "item_completed", itemType: "tool_use", id: "toolu_02", text: "Bash" },
+    {
+      type: "tool_call",
+      callId: "toolu_02",
+      toolName: "Bash",
+      input: { command: "false" },
+      inputSummary: "false",
+    },
+    {
+      type: "tool_result",
+      id: "toolu_02",
+      name: "Bash",
+      isError: true,
+      outputSummary: "exit code 1",
+    },
+    {
+      type: "turn_completed",
+      turn: 1,
+      stopReason: "tool_use",
+      usage: { inputTokens: 20, outputTokens: 5 },
+    },
+    { type: "turn_started", turn: 2 },
+    { type: "item_completed", itemType: "text", id: "2:0", text: "That command failed." },
+    {
+      type: "turn_completed",
+      turn: 2,
+      stopReason: "end_turn",
+      usage: { inputTokens: 35, outputTokens: 4 },
+    },
+    { type: "run_finished", outcome: "completed" },
+  ]),
+}
+
+/** A preflight ask (spec v1 S17). Synthetic — see the module doc. */
+const ASK_TURN: GoldenRun = {
+  name: "ask-turn",
+  inputs: run("msg-ask", [
+    { type: "turn_started", turn: 1 },
+    {
+      type: "ask_user",
+      askId: "ask_1",
+      code: "signed_thinking_mismatch",
+      title: "Thinking signed by another model",
+      detail: "The last turn's reasoning was signed by a different model.\nKeep it or drop it?",
+      options: [
+        { id: "keep", label: "Keep it", isDefault: true },
+        { id: "drop", label: "Drop it", destructive: true },
+      ],
+    },
+    { type: "item_completed", itemType: "text", id: "1:0", text: "Kept the reasoning." },
+    {
+      type: "turn_completed",
+      turn: 1,
+      stopReason: "end_turn",
+      usage: { inputTokens: 18, outputTokens: 3 },
+    },
+    { type: "run_finished", outcome: "completed" },
+  ]),
+}
+
+/** A fatal provider error in the middle of a streamed reply. Terminal: the run fails. */
 const ERROR_TURN: GoldenRun = {
   name: "error-turn",
   inputs: run("msg-error", [
@@ -122,7 +220,53 @@ const ERROR_TURN: GoldenRun = {
       message: "The provider rejected the credential.",
       code: "auth_invalid",
       hint: "Log in again.",
+      recoverable: false,
     },
+    { type: "status", phase: "waiting_for_host", cause: "permanent" },
+    { type: "run_finished", outcome: "waiting" },
+  ]),
+}
+
+/** Two retries, then the reply. `status` parts are transient. */
+const RETRY_TURN: GoldenRun = {
+  name: "retry-turn",
+  inputs: run("msg-retry", [
+    { type: "turn_started", turn: 1 },
+    { type: "status", phase: "sending" },
+    { type: "status", phase: "retrying", attempt: 1, nextDelayMs: 5, cause: "transient" },
+    { type: "status", phase: "retrying", attempt: 2, nextDelayMs: 8, cause: "transient" },
+    { type: "status", phase: "receiving" },
+    { type: "item_completed", itemType: "text", id: "1:0", text: "Done after two retries." },
+    {
+      type: "turn_completed",
+      turn: 1,
+      stopReason: "end_turn",
+      usage: { inputTokens: 20, outputTokens: 5 },
+    },
+    { type: "run_finished", outcome: "completed" },
+  ]),
+}
+
+/** A quota wait, then the reply. */
+const QUOTA_TURN: GoldenRun = {
+  name: "quota-turn",
+  inputs: run("msg-quota", [
+    { type: "turn_started", turn: 1 },
+    { type: "quota", provider: "scripted", used: 100, limit: 100, resetAt: 1_700_000_060_000 },
+    {
+      type: "status",
+      phase: "waiting_for_quota",
+      resetAt: 1_700_000_060_000,
+      cause: "recoverable",
+    },
+    { type: "item_completed", itemType: "text", id: "1:0", text: "Done after the quota wait." },
+    {
+      type: "turn_completed",
+      turn: 1,
+      stopReason: "end_turn",
+      usage: { inputTokens: 15, outputTokens: 5 },
+    },
+    { type: "run_finished", outcome: "completed" },
   ]),
 }
 
@@ -151,152 +295,6 @@ const BUFFERED_CONTINUATION: GoldenRun = {
       stopReason: "end_turn",
       usage: { inputTokens: 70, outputTokens: 5 },
     },
-  ]),
-}
-
-/** A tool that needs approval: approved, run with streamed output, then the answer. */
-const APPROVAL_TURN: GoldenRun = {
-  name: "approval-turn",
-  inputs: run("msg-approval", [
-    { type: "user_message", text: "Clean up the build folder." },
-    { type: "turn_started", turn: 1 },
-    { type: "item_started", itemType: "tool_use", id: "toolu_02" },
-    { type: "item_completed", itemType: "tool_use", id: "toolu_02", text: "Bash" },
-    {
-      type: "ask_user",
-      askId: "ask_1",
-      kind: "approval",
-      question: "Run rm -rf dist?",
-      callId: "toolu_02",
-      toolName: "Bash",
-      inputSummary: "rm -rf dist",
-    },
-    { type: "ask_answered", askId: "ask_1", answer: { kind: "approval", approved: true } },
-    { type: "tool_call", callId: "toolu_02", toolName: "Bash", inputSummary: "rm -rf dist" },
-    {
-      type: "tool_output",
-      callId: "toolu_02",
-      toolName: "Bash",
-      text: "removed dist/a.js\n",
-      truncated: false,
-      totalBytes: 18,
-    },
-    {
-      type: "tool_output",
-      callId: "toolu_02",
-      toolName: "Bash",
-      text: "removed dist/b.js\n",
-      truncated: false,
-      totalBytes: 36,
-    },
-    {
-      type: "tool_result",
-      id: "toolu_02",
-      name: "Bash",
-      isError: false,
-      inputSummary: "rm -rf dist",
-      outputSummary: "2 files removed",
-      durationMs: 120,
-    },
-    {
-      type: "turn_completed",
-      turn: 1,
-      stopReason: "tool_use",
-      usage: { inputTokens: 80, outputTokens: 12 },
-    },
-    { type: "turn_started", turn: 2 },
-    { type: "item_started", itemType: "text", id: "2:0" },
-    { type: "item_completed", itemType: "text", id: "2:0", text: "Removed the dist folder." },
-    {
-      type: "turn_completed",
-      turn: 2,
-      stopReason: "end_turn",
-      usage: { inputTokens: 101, outputTokens: 6 },
-    },
-    { type: "run_finished", outcome: "completed" },
-  ]),
-}
-
-/** A tool the person denies. Core reports the call as an error result. */
-const DENIED_TURN: GoldenRun = {
-  name: "denied-turn",
-  inputs: run("msg-denied", [
-    { type: "turn_started", turn: 1 },
-    { type: "item_completed", itemType: "tool_use", id: "toolu_03", text: "Bash" },
-    {
-      type: "ask_user",
-      askId: "ask_2",
-      kind: "approval",
-      question: "Run rm -rf dist?",
-      callId: "toolu_03",
-      toolName: "Bash",
-      inputSummary: "rm -rf dist",
-    },
-    {
-      type: "ask_answered",
-      askId: "ask_2",
-      answer: { kind: "approval", approved: false, reason: "Keep it." },
-    },
-    { type: "tool_result", id: "toolu_03", name: "Bash", isError: true, outputSummary: "denied" },
-    {
-      type: "turn_completed",
-      turn: 1,
-      stopReason: "tool_use",
-      usage: { inputTokens: 60, outputTokens: 10 },
-    },
-    { type: "turn_started", turn: 2 },
-    { type: "item_completed", itemType: "text", id: "2:0", text: "I left dist in place." },
-    {
-      type: "turn_completed",
-      turn: 2,
-      stopReason: "end_turn",
-      usage: { inputTokens: 75, outputTokens: 6 },
-    },
-    { type: "run_finished", outcome: "completed" },
-  ]),
-}
-
-/** A free-form question, its answer, and the reply that uses it. */
-const QUESTION_TURN: GoldenRun = {
-  name: "question-turn",
-  inputs: run("msg-question", [
-    { type: "turn_started", turn: 1 },
-    {
-      type: "ask_user",
-      askId: "ask_3",
-      kind: "question",
-      question: "Which branch?",
-      options: ["main", "dev"],
-    },
-    { type: "ask_answered", askId: "ask_3", answer: { kind: "text", text: "dev" } },
-    { type: "item_completed", itemType: "text", id: "1:0", text: "Using dev." },
-    {
-      type: "turn_completed",
-      turn: 1,
-      stopReason: "end_turn",
-      usage: { inputTokens: 30, outputTokens: 3 },
-    },
-    { type: "run_finished", outcome: "completed" },
-  ]),
-}
-
-/** Retries and a quota wait before the reply. Status parts are transient. */
-const RETRY_TURN: GoldenRun = {
-  name: "retry-turn",
-  inputs: run("msg-retry", [
-    { type: "turn_started", turn: 1 },
-    { type: "status", phase: "retrying", attempt: 1, nextDelayMs: 1000, cause: "overloaded" },
-    { type: "status", phase: "retrying", attempt: 2, nextDelayMs: 2000, cause: "overloaded" },
-    { type: "quota", provider: "fake", used: 100, limit: 100, resetAt: 1_700_000_060_000 },
-    { type: "status", phase: "waiting_for_quota", resetAt: 1_700_000_060_000 },
-    { type: "status", phase: "stream" },
-    { type: "item_completed", itemType: "text", id: "1:0", text: "Done after the wait." },
-    {
-      type: "turn_completed",
-      turn: 1,
-      stopReason: "end_turn",
-      usage: { inputTokens: 20, outputTokens: 5 },
-    },
     { type: "run_finished", outcome: "completed" },
   ]),
 }
@@ -306,10 +304,10 @@ export const GOLDEN_RUNS: readonly GoldenRun[] = [
   TEXT_TURN,
   REASONING_TURN,
   TOOL_TURN,
+  TOOL_ERROR_TURN,
+  ASK_TURN,
   ERROR_TURN,
-  BUFFERED_CONTINUATION,
-  APPROVAL_TURN,
-  DENIED_TURN,
-  QUESTION_TURN,
   RETRY_TURN,
+  QUOTA_TURN,
+  BUFFERED_CONTINUATION,
 ]

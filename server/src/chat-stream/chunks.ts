@@ -10,9 +10,12 @@
  * @module chat-stream/chunks
  */
 
-import type { EventUsage, NoticeEvent } from "@minimal-agent/core/sdk/events"
-
-import type { StatusEvent } from "../core-mirror/events.ts"
+import type {
+  AskUserOption,
+  EventUsage,
+  NoticeEvent,
+  StatusEvent,
+} from "@minimal-agent/core/sdk/events"
 
 /** Response headers of the UI message stream protocol (SSE, version 1). */
 export const UI_MESSAGE_STREAM_HEADERS = {
@@ -60,13 +63,23 @@ export type NoticeData = NoticeEvent["notice"]
 /** Payload of a transient `data-status` part: core's `status` event without its tag. */
 export type StatusData = Omit<StatusEvent, "type">
 
-/** Payload of a `data-ask-user` part: a free-form question, and its answer once given. */
+/**
+ * Payload of a `data-ask-user` part: core's preflight ask (spec v1 S17), a
+ * multiple-choice question with no inherent connection to a tool call (see
+ * `AskUserEvent`'s doc at `@minimal-agent/core/sdk/events`: it fires before a
+ * send, for example when a conversation carries a thinking block signed by a
+ * different model). `options` is unchanged from core; the chosen `answer` is
+ * one of their `id`s, or `null` for a decline. There is no corresponding
+ * "answered" event (core does not emit one — `session.answer` just resolves
+ * the pending promise), so the client marks an ask answered itself, right
+ * when it posts the answer.
+ */
 export interface AskUserData {
   askId: string
-  question: string
-  options?: string[]
-  status: "pending" | "answered"
-  answer?: string
+  code: string
+  title: string
+  detail: string
+  options: AskUserOption[]
 }
 
 /**
@@ -83,7 +96,12 @@ export type ChatDataTypes = {
 /**
  * One UI message stream part. Every tool part sets `dynamic: true`: the
  * frontend has no static types for core's tools, so it renders them as
- * `dynamic-tool` parts.
+ * `dynamic-tool` parts. There is no tool-approval part: core's `ask_user`
+ * (spec v1 S17) is a preflight question unrelated to any specific tool call,
+ * never a request to approve one (core has no tool-approval concept at all;
+ * a tool call simply runs once the model emits it — see `backend/runtime-backend.ts`'s
+ * module doc on the "no tools" scope decision, which also means these tool
+ * parts never fire with today's sessions).
  */
 export type UiMessageChunk =
   | { type: "start"; messageId?: string }
@@ -110,9 +128,6 @@ export type UiMessageChunk =
       preliminary?: true
     }
   | { type: "tool-output-error"; toolCallId: string; errorText: string; dynamic: true }
-  | { type: "tool-output-denied"; toolCallId: string }
-  | { type: "tool-approval-request"; approvalId: string; toolCallId: string }
-  | { type: "tool-approval-response"; approvalId: string; approved: boolean; reason?: string }
   | { type: "data-usage"; data: TurnUsageData }
   | { type: "data-usage"; id: string; data: QuotaUsageData }
   | { type: "data-notice"; data: NoticeData }

@@ -2,8 +2,10 @@
  * The app root: the token gate, the session list, and the open session.
  *
  * Without a token (see `api/token.ts`) the app shows how to get one and
- * calls nothing. With the fake backend, a banner says so on every page, so
- * canned replies are never taken for an agent.
+ * calls nothing. The server's `transport` (every session's model replies
+ * are scripted, not a real provider — AGENTS.md, "Session backend") shows as
+ * a banner on every page, so a scripted reply is never taken for a real
+ * agent's.
  *
  * @module App
  */
@@ -15,7 +17,7 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 
 import { createSession, listSessions, onUnauthorized } from "./api/client.ts"
 import { getToken } from "./api/token.ts"
-import type { BackendKind, SessionSummary } from "./api/types.ts"
+import type { SessionSummary, TransportInfo } from "./api/types.ts"
 import { type Route, useRoute } from "./router.ts"
 import { SessionList } from "./session/session-list.tsx"
 import { SessionPage } from "./session/session-page.tsx"
@@ -44,22 +46,20 @@ export function Locked() {
   )
 }
 
-/** Says that the fake backend answers. */
-export function FakeBanner() {
+/** Says that every reply is scripted: `transport` from `GET /api/sessions`. */
+export function TransportBanner({ transport }: { transport: TransportInfo }) {
   return (
-    <Alert data-testid="fake-banner">
+    <Alert data-testid="transport-banner">
       <FlaskConicalIcon />
-      <AlertTitle>Fake backend</AlertTitle>
-      <AlertDescription>
-        Replies are canned events for development and tests. No model is called and no tool runs.
-      </AlertDescription>
+      <AlertTitle>Scripted transport</AlertTitle>
+      <AlertDescription>{transport.description}</AlertDescription>
     </Alert>
   )
 }
 
 function Shell() {
   const [route, navigate] = useRoute()
-  const [backend, setBackend] = React.useState<BackendKind | null>(null)
+  const [transport, setTransport] = React.useState<TransportInfo | null>(null)
   const [sessions, setSessions] = React.useState<SessionSummary[]>([])
   const [creating, setCreating] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
@@ -67,7 +67,7 @@ function Shell() {
   const refresh = React.useCallback(() => {
     void listSessions()
       .then((list) => {
-        setBackend(list.backend)
+        setTransport(list.transport)
         setSessions(list.sessions)
         setError(null)
       })
@@ -96,9 +96,9 @@ function Shell() {
 
   return (
     <div className="flex h-dvh flex-col">
-      {backend === "fake" && (
+      {transport !== null && (
         <div className="border-b px-4 py-2">
-          <FakeBanner />
+          <TransportBanner transport={transport} />
         </div>
       )}
       <div className="flex min-h-0 flex-1">

@@ -1,0 +1,30 @@
+data: {"type":"start","messageId":"msg-tool-error"}
+
+data: {"type":"start-step"}
+
+data: {"type":"tool-input-available","toolCallId":"toolu_02","toolName":"Bash","input":null,"dynamic":true}
+
+data: {"type":"tool-input-available","toolCallId":"toolu_02","toolName":"Bash","input":{"command":"false"},"dynamic":true}
+
+data: {"type":"tool-output-error","toolCallId":"toolu_02","errorText":"exit code 1","dynamic":true}
+
+data: {"type":"data-usage","data":{"kind":"turn","turn":1,"usage":{"inputTokens":20,"outputTokens":5}}}
+
+data: {"type":"finish-step"}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-start","id":"2:0"}
+
+data: {"type":"text-delta","id":"2:0","delta":"That command failed."}
+
+data: {"type":"text-end","id":"2:0"}
+
+data: {"type":"data-usage","data":{"kind":"turn","turn":2,"usage":{"inputTokens":35,"outputTokens":4}}}
+
+data: {"type":"finish-step"}
+
+data: {"type":"finish","finishReason":"stop"}
+
+data: [DONE]
+

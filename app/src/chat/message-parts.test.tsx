@@ -6,10 +6,16 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 
 import { ContextMeter, contextTokens, lastTurnUsage } from "./context-meter.tsx"
 import { decodeHistory } from "./history.ts"
-import { AssistantParts, formatMs, toolInputText, toolOutputView } from "./message-parts.tsx"
+import {
+  AskRequest,
+  AssistantParts,
+  formatMs,
+  toolInputText,
+  toolOutputView,
+} from "./message-parts.tsx"
 import { statusText } from "./status-text.ts"
 
-const handlers = { onApproval: () => {}, onAnswer: () => {} }
+const handlers = { onAnswer: () => {} }
 
 function render(message: ChatMessage, streaming = false): string {
   return renderToString(
@@ -45,7 +51,7 @@ describe("tool parts follow the Tool pattern's state table", () => {
     expect(render(tool("input-available"), false)).toContain("Failed to run")
   })
 
-  test("output, error, and denied", () => {
+  test("output and error", () => {
     const ran = render(
       tool("output-available", {
         output: { isError: false, summary: "2 removed", durationMs: 120, text: "a\n" },
@@ -54,38 +60,43 @@ describe("tool parts follow the Tool pattern's state table", () => {
     expect(ran).toContain("Ran")
     expect(ran).toContain("2 removed · 120ms")
     expect(render(tool("output-error", { errorText: "no such file" }))).toContain("Failed to run")
-    expect(render(tool("output-denied", { approval: { id: "a", approved: false } }))).toContain(
-      "Denied",
+  })
+})
+
+describe("a preflight ask (Confirmation)", () => {
+  const data = {
+    askId: "ask_1",
+    code: "signed_thinking_mismatch",
+    title: "Thinking signed by another model",
+    detail: "Keep it or drop it?",
+    options: [
+      { id: "keep", label: "Keep it", isDefault: true },
+      { id: "drop", label: "Drop it", destructive: true },
+    ],
+  }
+
+  test("shows its title, detail, and every option, with Decline", () => {
+    const html = renderToString(
+      <TooltipProvider>
+        <AskRequest data={data} onAnswer={() => {}} />
+      </TooltipProvider>,
     )
+    expect(html).toContain('data-testid="ask"')
+    expect(html).toContain("Thinking signed by another model")
+    expect(html).toContain("Keep it or drop it?")
+    expect(html).toContain("Keep it")
+    expect(html).toContain("Drop it")
+    expect(html).toContain("Decline")
   })
 
-  test("a pending approval is a Confirmation with Approve and Deny", () => {
-    const html = render(tool("approval-requested", { approval: { id: "ask_1" } }))
-    expect(html).toContain('data-testid="approval"')
-    expect(html).toContain("Run <!-- -->Bash<!-- --> <!-- -->rm -rf dist<!-- -->?")
-    expect(html).toContain("Approve")
-    expect(html).toContain("Deny")
-  })
-
-  test("a free-form question shows its options", () => {
+  test("renders inside an assistant message too, via AssistantParts", () => {
     const html = render({
       id: "m",
       role: "assistant",
-      parts: [
-        {
-          type: "data-ask-user",
-          id: "ask_2",
-          data: {
-            askId: "ask_2",
-            question: "Which branch?",
-            options: ["main", "dev"],
-            status: "pending",
-          },
-        },
-      ],
+      parts: [{ type: "data-ask-user", id: data.askId, data }],
     })
-    expect(html).toContain("Which branch?")
-    expect(html).toContain("dev")
+    expect(html).toContain('data-testid="ask"')
+    expect(html).toContain("Thinking signed by another model")
   })
 })
 
@@ -106,7 +117,7 @@ describe("helpers", () => {
     expect(
       statusText({ phase: "retrying", attempt: 2, nextDelayMs: 2000, cause: "overloaded" }),
     ).toBe("Retrying in 2s, attempt 3 (overloaded)")
-    expect(statusText({ phase: "tool-run", toolName: "Bash" })).toBe("Running Bash")
+    expect(statusText({ phase: "running_tool", toolName: "Bash" })).toBe("Running Bash")
     expect(statusText({ phase: "brand_new_phase" })).toBe("brand_new_phase")
   })
 })

@@ -12,7 +12,11 @@
  *   `tool_output`, and ends at `tool_result`. Its duration is the
  *   `durationMs` core reports, else the time between those entries.
  * - Waits: `status` with `retrying`, `waiting_for_quota`, or
- *   `waiting_for_host`, `quota`, and `ask_user` until it is answered.
+ *   `waiting_for_host`, `quota`, and `ask_user` (core's preflight ask, a
+ *   plain multiple-choice question, never a tool approval: core has no
+ *   tool-approval concept, so a tool call never links to an ask). There is
+ *   no event for an answer, so an `ask` wait always shows as asked, never
+ *   as answered — same as the chat (spec 4.3's `data-ask-user`).
  * - Diagnostics and token usage are lists in seq order.
  *
  * Unknown event kinds and fields are ignored: core adds kinds over time.
@@ -34,11 +38,10 @@ export interface TraceTool {
   /** `tool_result.outputSummary`. */
   summary?: string
   durationMs?: number
-  approval?: "requested" | "approved" | "denied"
-  state: "running" | "done" | "error" | "denied"
+  state: "running" | "done" | "error"
 }
 
-/** A wait: a retry, a quota wait, a wait for the host, or a question to the person. */
+/** A wait: a retry, a quota wait, a wait for the host, or a preflight ask. */
 export interface TraceWait {
   seq: number
   ts: number
@@ -50,8 +53,8 @@ export interface TraceWait {
   provider?: string
   used?: number
   limit?: number
-  question?: string
-  answer?: string
+  /** `ask_user.title`. */
+  title?: string
 }
 
 /** One round: a model response and the tools it ran. */
@@ -146,7 +149,6 @@ class Folder {
   private run: TraceRun | null = null
   private round: TraceRound | null = null
   private readonly tools = new Map<string, TraceTool>()
-  private readonly asks = new Map<string, { wait: TraceWait; callId?: string }>()
   private totalInput = 0
   private totalOutput = 0
 
@@ -162,7 +164,6 @@ class Folder {
   private openRun(seq: number, ts: number, userText?: string): TraceRun {
     this.round = null
     this.tools.clear()
-    this.asks.clear()
     const run: TraceRun = {
       index: this.model.runs.length + 1,
       seq,
@@ -254,9 +255,6 @@ class Folder {
       case "ask_user":
         this.askUser(seq, ts, data)
         return
-      case "ask_answered":
-        this.askAnswered(data)
-        return
       case "notice": {
         const notice = data.notice
         const kind =
@@ -325,8 +323,7 @@ class Folder {
     if (summary !== undefined) tool.summary = summary
     if (input !== undefined && tool.input === undefined) tool.input = input
     tool.durationMs = num(data, "durationMs") ?? ts - tool.startedAt
-    if (tool.approval === "denied") tool.state = "denied"
-    else tool.state = data.isError === true ? "error" : "done"
+    tool.state = data.isError === true ? "error" : "done"
   }
 
   private status(seq: number, ts: number, data: EventData): void {
@@ -343,29 +340,7 @@ class Folder {
   }
 
   private askUser(seq: number, ts: number, data: EventData): void {
-    const askId = str(data, "askId") ?? ""
-    const callId = str(data, "callId")
-    const wait: TraceWait = { seq, ts, kind: "ask", question: str(data, "question") ?? "" }
-    this.addWait(seq, ts, wait)
-    this.asks.set(askId, { wait, ...(callId === undefined ? {} : { callId }) })
-    if (str(data, "kind") === "approval" && callId !== undefined) {
-      this.tool(seq, ts, callId, str(data, "toolName") ?? "").approval = "requested"
-    }
-  }
-
-  private askAnswered(data: EventData): void {
-    const ask = this.asks.get(str(data, "askId") ?? "")
-    const answer = data.answer
-    if (ask === undefined || typeof answer !== "object" || answer === null) return
-    const fields: EventData = { type: "answer", ...answer }
-    const approved = fields.approved
-    if (typeof approved === "boolean") {
-      ask.wait.answer = approved ? "approved" : "denied"
-      const tool = ask.callId === undefined ? undefined : this.tools.get(ask.callId)
-      if (tool !== undefined) tool.approval = approved ? "approved" : "denied"
-    } else {
-      ask.wait.answer = str(fields, "text") ?? ""
-    }
+    this.addWait(seq, ts, { seq, ts, kind: "ask", title: str(data, "title") ?? "" })
   }
 }
 

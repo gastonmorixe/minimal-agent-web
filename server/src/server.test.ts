@@ -4,11 +4,21 @@ import { join } from "node:path"
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 
-import { FakeBackend } from "./backend/fake/fake-backend.ts"
+import { RuntimeBackend } from "./backend/runtime-backend.ts"
 import { BindRefusedError } from "./security/security.ts"
 import { startServer } from "./server.ts"
 
 const TOKEN = "test-token-0123456789-abcdefghijklmnop"
+const TRANSPORT = { kind: "scripted" as const, description: "scripted, for tests" }
+
+function backend() {
+  return new RuntimeBackend({
+    // oxlint-disable-next-line require-yield -- this test never streams a turn.
+    sendFn: async function* () {
+      return { blocks: [], text: "", stopReason: "end_turn" }
+    },
+  })
+}
 
 let root: string
 let appDir: string
@@ -21,7 +31,7 @@ beforeAll(() => {
   writeFileSync(join(appDir, "index.html"), "<!doctype html><title>app</title>")
   writeFileSync(join(appDir, "assets", "app.js"), "console.log(1)")
   writeFileSync(join(root, "secret.txt"), "outside the app dir")
-  server = startServer({ appDir, backend: new FakeBackend({ stepDelayMs: 0 }), token: TOKEN })
+  server = startServer({ appDir, backend: backend(), transport: TRANSPORT, token: TOKEN })
 })
 
 afterAll(() => {
@@ -89,7 +99,7 @@ describe("bearer token (S57)", () => {
   test("accepts an API call with the right token", async () => {
     const response = await get("/api/sessions", { headers: auth(TOKEN) })
     expect(response.status).toBe(200)
-    expect(await response.json()).toEqual({ backend: "fake", sessions: [] })
+    expect(await response.json()).toEqual({ backend: "core", transport: TRANSPORT, sessions: [] })
   })
 
   test("guards every API path, unknown ones included", async () => {
@@ -97,11 +107,11 @@ describe("bearer token (S57)", () => {
       ["GET", "/api"],
       ["GET", "/api/nope"],
       ["POST", "/api/sessions"],
-      ["GET", "/api/sessions/fake-1"],
-      ["POST", "/api/sessions/fake-1/messages"],
-      ["GET", "/api/sessions/fake-1/events"],
-      ["POST", "/api/sessions/fake-1/answers"],
-      ["POST", "/api/sessions/fake-1/abort"],
+      ["GET", "/api/sessions/session-1"],
+      ["POST", "/api/sessions/session-1/messages"],
+      ["GET", "/api/sessions/session-1/events"],
+      ["POST", "/api/sessions/session-1/answers"],
+      ["POST", "/api/sessions/session-1/abort"],
     ] as const
     for (const [method, path] of paths) {
       expect((await get(path, { method })).status).toBe(401)
@@ -135,9 +145,9 @@ describe("bearer token (S57)", () => {
 
   test("refuses a short or unsafe token", () => {
     for (const token of ["short", `${"a".repeat(40)} b`, `${"a".repeat(40)}#`]) {
-      expect(() => startServer({ appDir, backend: new FakeBackend(), token, port: 0 })).toThrow(
-        "API token",
-      )
+      expect(() =>
+        startServer({ appDir, backend: backend(), transport: TRANSPORT, token, port: 0 }),
+      ).toThrow("API token")
     }
   })
 })
@@ -146,7 +156,7 @@ describe("bind address (S57)", () => {
   test("refuses a non-loopback host unless allowed on purpose", () => {
     for (const hostname of ["0.0.0.0", "::", "192.168.1.10", "example.com"]) {
       expect(() =>
-        startServer({ appDir, backend: new FakeBackend(), token: TOKEN, hostname }),
+        startServer({ appDir, backend: backend(), transport: TRANSPORT, token: TOKEN, hostname }),
       ).toThrow(BindRefusedError)
     }
   })
@@ -154,7 +164,8 @@ describe("bind address (S57)", () => {
   test("binds a non-loopback host when allowRemoteBind is set", () => {
     const remote = startServer({
       appDir,
-      backend: new FakeBackend(),
+      backend: backend(),
+      transport: TRANSPORT,
       token: TOKEN,
       hostname: "0.0.0.0",
       allowRemoteBind: true,
@@ -165,7 +176,13 @@ describe("bind address (S57)", () => {
 
   test("binds the IPv4 loopback names (::1 is covered by isLoopbackHost)", () => {
     for (const hostname of ["localhost", "127.0.0.1"]) {
-      const local = startServer({ appDir, backend: new FakeBackend(), token: TOKEN, hostname })
+      const local = startServer({
+        appDir,
+        backend: backend(),
+        transport: TRANSPORT,
+        token: TOKEN,
+        hostname,
+      })
       void local.stop(true)
     }
   })
@@ -199,7 +216,7 @@ describe("main.ts", () => {
     }
     child.kill()
     await child.exited
-    expect(out).toContain("FAKE backend")
+    expect(out).toContain("scripted transport")
     const url = new URL(/open (\S+)/u.exec(out)?.[1] ?? "")
     expect(url.hostname).toBe("127.0.0.1")
     expect(url.search).toBe("")
