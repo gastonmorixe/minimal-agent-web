@@ -1,0 +1,20 @@
+data: {"type":"start","messageId":"msg-text"}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-start","id":"1:text"}
+
+data: {"type":"text-delta","id":"1:text","delta":"Hello"}
+
+data: {"type":"text-delta","id":"1:text","delta":", world."}
+
+data: {"type":"text-end","id":"1:text"}
+
+data: {"type":"data-usage","data":{"kind":"turn","turn":1,"usage":{"inputTokens":12,"outputTokens":4}}}
+
+data: {"type":"finish-step"}
+
+data: {"type":"finish","finishReason":"stop"}
+
+data: [DONE]
+

@@ -12,6 +12,7 @@
     "@minimal-agent/core": "git+ssh://git@github.com/gastonmorixe/minimal-agent-core.git#d231c709d9ecc4df223272f656d2597a4df3b495"
   },
   "devDependencies": {
+    "ai": "7.0.159",
     "bun-types": "^1.4.3"
   }
 }

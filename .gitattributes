@@ -1,0 +1,2 @@
+# Golden SSE files are compared byte for byte.
+*.sse text eol=lf

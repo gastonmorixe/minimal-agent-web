@@ -1,0 +1,26 @@
+data: {"type":"start","messageId":"msg-reasoning"}
+
+data: {"type":"start-step"}
+
+data: {"type":"reasoning-start","id":"1:thinking"}
+
+data: {"type":"reasoning-delta","id":"1:thinking","delta":"The user wants"}
+
+data: {"type":"reasoning-delta","id":"1:thinking","delta":" a short answer."}
+
+data: {"type":"text-start","id":"1:text"}
+
+data: {"type":"text-delta","id":"1:text","delta":"Short answer."}
+
+data: {"type":"reasoning-end","id":"1:thinking"}
+
+data: {"type":"text-end","id":"1:text"}
+
+data: {"type":"data-usage","data":{"kind":"turn","turn":1,"usage":{"inputTokens":40,"outputTokens":18,"cacheReadTokens":32}}}
+
+data: {"type":"finish-step"}
+
+data: {"type":"finish","finishReason":"stop"}
+
+data: [DONE]
+

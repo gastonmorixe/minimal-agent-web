@@ -1,0 +1,34 @@
+data: {"type":"start","messageId":"msg-tool"}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-start","id":"1:text"}
+
+data: {"type":"text-delta","id":"1:text","delta":"Let me read it."}
+
+data: {"type":"text-end","id":"1:text"}
+
+data: {"type":"tool-input-available","toolCallId":"toolu_01","toolName":"Read","input":null,"dynamic":true}
+
+data: {"type":"tool-output-available","toolCallId":"toolu_01","output":{"isError":false},"dynamic":true}
+
+data: {"type":"data-usage","data":{"kind":"turn","turn":1,"usage":{"inputTokens":30,"outputTokens":9}}}
+
+data: {"type":"finish-step"}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-start","id":"2:text"}
+
+data: {"type":"text-delta","id":"2:text","delta":"The file has three lines."}
+
+data: {"type":"text-end","id":"2:text"}
+
+data: {"type":"data-usage","data":{"kind":"turn","turn":2,"usage":{"inputTokens":52,"outputTokens":7}}}
+
+data: {"type":"finish-step"}
+
+data: {"type":"finish","finishReason":"stop"}
+
+data: [DONE]
+
