@@ -41,7 +41,7 @@ let server: ReturnType<typeof startServer>
 beforeAll(() => {
   root = mkdtempSync(join(tmpdir(), "ma-web-api-"))
   backend = new RuntimeBackend({
-    sendFn: createScriptedTransport({ stepDelayMs: 1 }),
+    sendFn: () => createScriptedTransport({ stepDelayMs: 1 }),
     retryCeilingMs: 5,
   })
   server = startServer({
@@ -335,6 +335,31 @@ describe("POST /api/sessions/:id/messages", () => {
       .map((part) => part.delta)
       .join("")
     expect(text).toContain("scripted retries")
+  })
+
+  test("two sessions retrying at once do not share scripted attempt counts", async () => {
+    // Regression: the scripted transport used to track retry/quota attempts
+    // in a module-level map keyed only by the scenario label ("retry"), so
+    // two sessions racing the same scripted script corrupted each other's
+    // counts (one session saw too few scripted failures, the other too
+    // many). `RuntimeBackend` now hands each session its own transport
+    // instance; this drives two "retry" turns concurrently and checks both
+    // see exactly the two failures the script documents, independently.
+    const ids = [await newSession(), await newSession()]
+    const retryingCounts = await Promise.all(
+      ids.map(async (id) => {
+        const response = await post(`/api/sessions/${id}/messages`, { text: "please retry" })
+        const { frames } = await readFrames(response, (seen) =>
+          seen.some((frame) => frame.includes('"type":"finish"')),
+        )
+        const statuses = dataOf(frames).filter(
+          (part): part is { type: string; data: { phase: string } } =>
+            isRecord(part) && part.type === "data-status",
+        )
+        return statuses.filter((part) => part.data.phase === "retrying").length
+      }),
+    )
+    expect(retryingCounts).toEqual([2, 2])
   })
 
   test("a quota turn waits for the reset, then replies", async () => {

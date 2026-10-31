@@ -46,7 +46,11 @@
  * `createRuntime` today, CLI included, until that caller does its own
  * provider-plugin wiring. `GET /api/sessions` and `GET /api/sessions/:id`
  * report `transport: "scripted"` so the app can say this plainly instead of
- * implying a real model answers.
+ * implying a real model answers. Each session gets its own transport
+ * instance (`RuntimeBackendOptions.sendFn` is a factory, called once per
+ * `createSession`): the scripted transport's retry/quota attempt counters
+ * are per-instance, so two sessions sharing one instance would corrupt
+ * each other's scripted retry counts.
  *
  * @module backend/runtime-backend
  */
@@ -73,8 +77,16 @@ import { createScriptedTransport, type ScriptedTransport } from "./transport/scr
 
 /** Options for {@link RuntimeBackend}. */
 export interface RuntimeBackendOptions {
-  /** The transport every session's `AgentCore` sends through. Default: a fresh scripted transport. */
-  sendFn?: ScriptedTransport
+  /**
+   * Builds the transport one session's `AgentCore` sends through. Called
+   * once per {@link createSession} call, never shared between sessions:
+   * the scripted transport's retry/quota attempt counters are per-instance
+   * (see `transport/scripted-transport.ts`), and two sessions sharing one
+   * instance would corrupt each other's counts (confirmed: two concurrent
+   * "retry" turns on a shared instance interleave their attempt counts).
+   * Default: a fresh {@link createScriptedTransport} per session.
+   */
+  sendFn?: () => ScriptedTransport
   /** Persist sessions to disk (core's real `SessionStore` + durable event log). Default: memory only. */
   persistDir?: string
   /** `cwd` recorded in each session's `meta` record, when persisting. */
@@ -163,7 +175,7 @@ async function* eventsOnly(entries: AsyncIterable<SessionEntry>): AsyncIterable<
 export class RuntimeBackend implements SessionBackend {
   readonly kind = "core"
   private readonly runtime: Runtime
-  private readonly sendFn: ScriptedTransport
+  private readonly sendFnFactory: () => ScriptedTransport
   private readonly persistDir: string | undefined
   private readonly cwd: string | undefined
   private readonly retryCeilingMs: number | undefined
@@ -174,7 +186,7 @@ export class RuntimeBackend implements SessionBackend {
   /** Create the backend. It starts with no sessions. */
   constructor(options: RuntimeBackendOptions = {}) {
     this.runtime = createRuntime({ now: options.now })
-    this.sendFn = options.sendFn ?? createScriptedTransport()
+    this.sendFnFactory = options.sendFn ?? (() => createScriptedTransport())
     this.persistDir = options.persistDir
     this.cwd = options.cwd
     this.retryCeilingMs = options.retryCeilingMs ?? DEFAULT_RETRY_CEILING_MS
@@ -190,7 +202,7 @@ export class RuntimeBackend implements SessionBackend {
       id,
       model,
       auth: PLACEHOLDER_AUTH,
-      sendFn: this.sendFn,
+      sendFn: this.sendFnFactory(),
       ...(this.retryCeilingMs !== undefined ? { retry: { ceilingMs: this.retryCeilingMs } } : {}),
       ...(this.persistDir !== undefined
         ? { persist: { dir: this.persistDir, cwd: input.cwd ?? this.cwd ?? "/" } }

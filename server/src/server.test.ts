@@ -13,10 +13,11 @@ const TRANSPORT = { kind: "scripted" as const, description: "scripted, for tests
 
 function backend() {
   return new RuntimeBackend({
-    // oxlint-disable-next-line require-yield -- this test never streams a turn.
-    sendFn: async function* () {
-      return { blocks: [], text: "", stopReason: "end_turn" }
-    },
+    sendFn: () =>
+      // oxlint-disable-next-line require-yield -- this test never streams a turn.
+      async function* () {
+        return { blocks: [], text: "", stopReason: "end_turn" }
+      },
   })
 }
 

@@ -51,8 +51,12 @@ function numberFromEnv(name: string): number | undefined {
 
 const persistDir = process.env.MA_WEB_PERSIST_DIR
 const retryCeilingMs = numberFromEnv("MA_WEB_RETRY_CEILING_MS")
+const scriptStepDelayMs = numberFromEnv("MA_WEB_SCRIPT_STEP_MS")
 const backend = new RuntimeBackend({
-  sendFn: createScriptedTransport({ stepDelayMs: numberFromEnv("MA_WEB_SCRIPT_STEP_MS") }),
+  // A factory, not a shared instance: each session needs its own transport
+  // (see `runtime-backend.ts`'s module doc) so concurrent sessions never
+  // corrupt each other's scripted retry/quota attempt counts.
+  sendFn: () => createScriptedTransport({ stepDelayMs: scriptStepDelayMs }),
   ...(persistDir === "" ? {} : { persistDir }),
   ...(retryCeilingMs === undefined ? {} : { retryCeilingMs }),
 })
