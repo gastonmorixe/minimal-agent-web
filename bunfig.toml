@@ -1,4 +1,4 @@
 # `bun test` from the repo root runs the server and app tests. Skip
-# dependencies and build output.
+# dependencies, build output, and the Playwright suite (`bun run test:e2e`).
 [test]
-pathIgnorePatterns = ["**/node_modules/**", "**/dist/**", "private/**", "tmp/**"]
+pathIgnorePatterns = ["**/node_modules/**", "**/dist/**", "private/**", "tmp/**", "e2e/**"]
