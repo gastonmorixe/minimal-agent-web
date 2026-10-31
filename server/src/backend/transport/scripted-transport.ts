@@ -99,9 +99,6 @@ function lastUserText(messages: ScriptedSendOptions["messages"]): string {
   return ""
 }
 
-/** Attempts seen per scenario label, for the retry script. Module state: test-only, serial use. */
-const retryAttempts = new Map<string, number>()
-
 async function* textReply(
   text: string,
   opts: ScriptedSendOptions,
@@ -163,6 +160,11 @@ async function* thinkingThenReply(
  */
 export function createScriptedTransport(options: ScriptedTransportOptions = {}): ScriptedTransport {
   const stepDelayMs = options.stepDelayMs ?? DEFAULT_STEP_DELAY_MS
+  // Attempts seen per scenario label, for the retry/quota scripts. Scoped to
+  // this transport instance (not module-level): two sessions driven by two
+  // separate `createScriptedTransport()` calls must never share a counter.
+  // `RuntimeBackend` relies on this by creating one instance per session.
+  const retryAttempts = new Map<string, number>()
 
   return async function* scriptedTransport(
     opts: ScriptedSendOptions,
