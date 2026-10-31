@@ -4,7 +4,10 @@
  * `bun run test:e2e` runs it; `bun run check` runs it after the build.
  *
  * The suite uses the `@playwright/test` version whose Chromium build is
- * installed (`PLAYWRIGHT_BROWSERS_PATH`). CI installs that build first.
+ * installed. `bun run test:e2e`'s own script installs that build when
+ * `$CI` is set (see package.json and AGENTS.md's "Tests" section); a
+ * sandbox with a preinstalled build at a fixed `PLAYWRIGHT_BROWSERS_PATH`
+ * and no `$CI` skips the install and uses that build directly.
  */
 
 import { randomBytes } from "node:crypto"
