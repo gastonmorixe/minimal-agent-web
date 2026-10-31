@@ -194,4 +194,101 @@ describe("AI SDK compatibility", () => {
       { type: "data-usage", data: { turn: 2 } },
     ])
   })
+
+  test("approval run decodes to an approved tool with its streamed and final output", async () => {
+    const { message, errors } = await decode("approval-turn")
+    expect(errors).toEqual([])
+    expect(message?.parts).toMatchObject([
+      { type: "step-start" },
+      {
+        type: "dynamic-tool",
+        toolName: "Bash",
+        toolCallId: "toolu_02",
+        state: "output-available",
+        input: "rm -rf dist",
+        approval: { id: "ask_1", approved: true },
+        output: {
+          isError: false,
+          summary: "2 files removed",
+          durationMs: 120,
+          text: "removed dist/a.js\nremoved dist/b.js\n",
+        },
+      },
+      { type: "data-usage", data: { turn: 1 } },
+      { type: "step-start" },
+      { type: "text", text: "Removed the dist folder.", state: "done" },
+      { type: "data-usage", data: { turn: 2 } },
+    ])
+  })
+
+  test("denied run decodes to an output-denied tool with the reason", async () => {
+    const { message, errors } = await decode("denied-turn")
+    expect(errors).toEqual([])
+    expect(message?.parts[1]).toMatchObject({
+      type: "dynamic-tool",
+      toolCallId: "toolu_03",
+      state: "output-denied",
+      approval: { id: "ask_2", approved: false, reason: "Keep it." },
+    })
+  })
+
+  test("question run decodes to one ask-user part, updated in place with the answer", async () => {
+    const { message, errors } = await decode("question-turn")
+    expect(errors).toEqual([])
+    const asks = message?.parts.filter((part) => part.type === "data-ask-user") ?? []
+    expect(asks).toEqual([
+      {
+        type: "data-ask-user",
+        id: "ask_3",
+        data: {
+          askId: "ask_3",
+          question: "Which branch?",
+          options: ["main", "dev"],
+          status: "answered",
+          answer: "dev",
+        },
+      },
+    ])
+  })
+
+  test("retry run keeps status out of the message and the quota as usage", async () => {
+    const { message, errors } = await decode("retry-turn")
+    expect(errors).toEqual([])
+    expect(message?.parts.some((part) => part.type === "data-status")).toBe(false)
+    expect(message?.parts).toMatchObject([
+      { type: "step-start" },
+      { type: "data-usage", id: "quota:fake", data: { kind: "quota", provider: "fake" } },
+      { type: "text", text: "Done after the wait.", state: "done" },
+      { type: "data-usage", data: { kind: "turn", turn: 1 } },
+    ])
+  })
+
+  test("the client ignores SSE comments, so keep-alives are safe mid-stream", async () => {
+    const sse = encodeChatStream(goldenInputs("text-turn"))
+    const withComments = sse.replace("\n\n", "\n\n: keep-alive\n\n")
+    const keepAliveServer = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () => new Response(withComments, { headers: UI_MESSAGE_STREAM_HEADERS }),
+    })
+    try {
+      const transport = new DefaultChatTransport<ChatMessage>({ api: keepAliveServer.url.href })
+      const stream = await transport.sendMessages({
+        trigger: "submit-message",
+        chatId: "chat-1",
+        messageId: undefined,
+        messages: [],
+        abortSignal: undefined,
+      })
+      let last: ChatMessage | undefined
+      for await (const snapshot of readUIMessageStream<ChatMessage>({ stream })) last = snapshot
+      expect(last?.parts).toMatchObject([
+        { type: "step-start" },
+        { type: "text", text: "Hello, world." },
+        { type: "data-usage" },
+      ])
+    } finally {
+      void keepAliveServer.stop(true)
+    }
+  })
 })

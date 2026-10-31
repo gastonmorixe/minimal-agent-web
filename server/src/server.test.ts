@@ -4,37 +4,39 @@ import { join } from "node:path"
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 
-import { UI_MESSAGE_STREAM_HEADERS } from "./chat-stream/chunks.ts"
-import { DEMO_CHAT_PATH, startServer } from "./server.ts"
+import { FakeBackend } from "./backend/fake/fake-backend.ts"
+import { BindRefusedError } from "./security/security.ts"
+import { startServer } from "./server.ts"
 
+const TOKEN = "test-token-0123456789-abcdefghijklmnop"
+
+let root: string
 let appDir: string
 let server: ReturnType<typeof startServer>
 
 beforeAll(() => {
-  const root = mkdtempSync(join(tmpdir(), "ma-web-server-"))
+  root = mkdtempSync(join(tmpdir(), "ma-web-server-"))
   appDir = join(root, "dist")
   mkdirSync(join(appDir, "assets"), { recursive: true })
   writeFileSync(join(appDir, "index.html"), "<!doctype html><title>app</title>")
   writeFileSync(join(appDir, "assets", "app.js"), "console.log(1)")
   writeFileSync(join(root, "secret.txt"), "outside the app dir")
-  server = startServer({ appDir })
+  server = startServer({ appDir, backend: new FakeBackend({ stepDelayMs: 0 }), token: TOKEN })
 })
 
 afterAll(() => {
   void server.stop(true)
-  rmSync(join(appDir, ".."), { recursive: true, force: true })
+  rmSync(root, { recursive: true, force: true })
 })
 
 function get(path: string, init?: RequestInit): Promise<Response> {
   return fetch(new URL(path, server.url), init)
 }
 
-describe("startServer", () => {
-  test("binds 127.0.0.1 by default", () => {
-    expect(server.hostname).toBe("127.0.0.1")
-  })
+const auth = (token: string) => ({ authorization: `Bearer ${token}` })
 
-  test("serves the app and its assets", async () => {
+describe("static app", () => {
+  test("serves the app and its assets without a token", async () => {
     expect(await (await get("/")).text()).toContain("<title>app</title>")
     const asset = await get("/assets/app.js")
     expect(asset.status).toBe(200)
@@ -52,19 +54,156 @@ describe("startServer", () => {
     }
   })
 
-  test("answers unknown API paths with 404", async () => {
-    const response = await get("/api/nope")
-    expect(response.status).toBe(404)
+  test("refuses other methods", async () => {
+    expect((await get("/", { method: "POST" })).status).toBe(405)
+  })
+})
+
+describe("bearer token (S57)", () => {
+  test("binds 127.0.0.1 by default", () => {
+    expect(server.hostname).toBe("127.0.0.1")
   })
 
-  test("streams the demo run as a UI message stream", async () => {
-    const response = await get(DEMO_CHAT_PATH, { method: "POST", body: "{}" })
-    expect(response.status).toBe(200)
-    for (const [name, value] of Object.entries(UI_MESSAGE_STREAM_HEADERS)) {
-      expect(response.headers.get(name)).toBe(value)
+  test("refuses an API call without a token", async () => {
+    const response = await get("/api/sessions")
+    expect(response.status).toBe(401)
+    expect(response.headers.get("www-authenticate")).toStartWith("Bearer")
+    expect(await response.json()).toEqual({ error: "unauthorized" })
+  })
+
+  test("refuses an API call with a wrong token, and does not echo it", async () => {
+    for (const header of [
+      `Bearer ${TOKEN}x`,
+      `Bearer ${TOKEN.slice(0, -1)}`,
+      "Bearer ",
+      `Basic ${TOKEN}`,
+      TOKEN,
+      `Bearer ${TOKEN} extra`,
+    ]) {
+      const response = await get("/api/sessions", { headers: { authorization: header } })
+      expect(response.status).toBe(401)
+      expect(await response.text()).not.toContain(TOKEN.slice(0, 10))
     }
-    const body = await response.text()
-    expect(body.startsWith('data: {"type":"start"')).toBe(true)
-    expect(body.endsWith("data: [DONE]\n\n")).toBe(true)
+  })
+
+  test("accepts an API call with the right token", async () => {
+    const response = await get("/api/sessions", { headers: auth(TOKEN) })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ backend: "fake", sessions: [] })
+  })
+
+  test("guards every API path, unknown ones included", async () => {
+    const paths = [
+      ["GET", "/api"],
+      ["GET", "/api/nope"],
+      ["POST", "/api/sessions"],
+      ["GET", "/api/sessions/fake-1"],
+      ["POST", "/api/sessions/fake-1/messages"],
+      ["GET", "/api/sessions/fake-1/events"],
+      ["POST", "/api/sessions/fake-1/answers"],
+      ["POST", "/api/sessions/fake-1/abort"],
+    ] as const
+    for (const [method, path] of paths) {
+      expect((await get(path, { method })).status).toBe(401)
+    }
+    expect((await get("/api/nope", { headers: auth(TOKEN) })).status).toBe(404)
+  })
+
+  test("sends no CORS headers, even to a cross-origin request or a preflight", async () => {
+    const origin = "http://evil.example"
+    const responses = [
+      await get("/api/sessions", { headers: { origin, ...auth(TOKEN) } }),
+      await get("/api/sessions", {
+        method: "OPTIONS",
+        headers: { origin, "access-control-request-method": "POST" },
+      }),
+      await get("/", { headers: { origin } }),
+    ]
+    for (const response of responses) {
+      for (const name of response.headers.keys()) expect(name).not.toStartWith("access-control-")
+    }
+    expect(responses[1]?.status).toBe(401)
+  })
+
+  test("sets the security headers on every answer", async () => {
+    for (const response of [await get("/"), await get("/api/sessions")]) {
+      expect(response.headers.get("x-frame-options")).toBe("DENY")
+      expect(response.headers.get("x-content-type-options")).toBe("nosniff")
+      expect(response.headers.get("referrer-policy")).toBe("no-referrer")
+    }
+  })
+
+  test("refuses a short or unsafe token", () => {
+    for (const token of ["short", `${"a".repeat(40)} b`, `${"a".repeat(40)}#`]) {
+      expect(() => startServer({ appDir, backend: new FakeBackend(), token, port: 0 })).toThrow(
+        "API token",
+      )
+    }
+  })
+})
+
+describe("bind address (S57)", () => {
+  test("refuses a non-loopback host unless allowed on purpose", () => {
+    for (const hostname of ["0.0.0.0", "::", "192.168.1.10", "example.com"]) {
+      expect(() =>
+        startServer({ appDir, backend: new FakeBackend(), token: TOKEN, hostname }),
+      ).toThrow(BindRefusedError)
+    }
+  })
+
+  test("binds a non-loopback host when allowRemoteBind is set", () => {
+    const remote = startServer({
+      appDir,
+      backend: new FakeBackend(),
+      token: TOKEN,
+      hostname: "0.0.0.0",
+      allowRemoteBind: true,
+    })
+    expect(remote.hostname).toBe("0.0.0.0")
+    void remote.stop(true)
+  })
+
+  test("binds the IPv4 loopback names (::1 is covered by isLoopbackHost)", () => {
+    for (const hostname of ["localhost", "127.0.0.1"]) {
+      const local = startServer({ appDir, backend: new FakeBackend(), token: TOKEN, hostname })
+      void local.stop(true)
+    }
+  })
+})
+
+describe("main.ts", () => {
+  const MAIN = join(import.meta.dir, "main.ts")
+
+  function runMain(env: Record<string, string>) {
+    return Bun.spawn(["bun", MAIN], {
+      env: { ...process.env, APP_DIR: appDir, PORT: "0", ...env },
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+  }
+
+  test("refuses HOST=0.0.0.0 without MA_WEB_ALLOW_REMOTE=1", async () => {
+    const child = runMain({ HOST: "0.0.0.0" })
+    expect(await child.exited).toBe(2)
+    expect(await new Response(child.stderr).text()).toContain("refusing to bind 0.0.0.0")
+  })
+
+  test("prints the app URL with a fresh random token in the fragment only", async () => {
+    const child = runMain({ MA_WEB_TOKEN: "" })
+    const reader = child.stdout.getReader()
+    let out = ""
+    while (!out.includes("open ")) {
+      const { value, done } = await reader.read()
+      if (done) break
+      out += new TextDecoder().decode(value)
+    }
+    child.kill()
+    await child.exited
+    expect(out).toContain("FAKE backend")
+    const url = new URL(/open (\S+)/u.exec(out)?.[1] ?? "")
+    expect(url.hostname).toBe("127.0.0.1")
+    expect(url.search).toBe("")
+    expect(url.pathname).toBe("/")
+    expect(url.hash).toMatch(/^#token=[A-Za-z0-9_-]{43}$/u)
   })
 })

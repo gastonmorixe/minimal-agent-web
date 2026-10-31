@@ -1,0 +1,40 @@
+data: {"type":"start","messageId":"msg-approval"}
+
+data: {"type":"start-step"}
+
+data: {"type":"tool-input-available","toolCallId":"toolu_02","toolName":"Bash","input":null,"dynamic":true}
+
+data: {"type":"tool-input-available","toolCallId":"toolu_02","toolName":"Bash","input":"rm -rf dist","dynamic":true}
+
+data: {"type":"tool-approval-request","approvalId":"ask_1","toolCallId":"toolu_02"}
+
+data: {"type":"tool-approval-response","approvalId":"ask_1","approved":true}
+
+data: {"type":"tool-input-available","toolCallId":"toolu_02","toolName":"Bash","input":"rm -rf dist","dynamic":true}
+
+data: {"type":"tool-output-available","toolCallId":"toolu_02","output":{"text":"removed dist/a.js\n","truncated":false,"totalBytes":18},"dynamic":true,"preliminary":true}
+
+data: {"type":"tool-output-available","toolCallId":"toolu_02","output":{"text":"removed dist/a.js\nremoved dist/b.js\n","truncated":false,"totalBytes":36},"dynamic":true,"preliminary":true}
+
+data: {"type":"tool-output-available","toolCallId":"toolu_02","output":{"isError":false,"summary":"2 files removed","durationMs":120,"text":"removed dist/a.js\nremoved dist/b.js\n"},"dynamic":true}
+
+data: {"type":"data-usage","data":{"kind":"turn","turn":1,"usage":{"inputTokens":80,"outputTokens":12}}}
+
+data: {"type":"finish-step"}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-start","id":"2:0"}
+
+data: {"type":"text-delta","id":"2:0","delta":"Removed the dist folder."}
+
+data: {"type":"text-end","id":"2:0"}
+
+data: {"type":"data-usage","data":{"kind":"turn","turn":2,"usage":{"inputTokens":101,"outputTokens":6}}}
+
+data: {"type":"finish-step"}
+
+data: {"type":"finish","finishReason":"stop"}
+
+data: [DONE]
+

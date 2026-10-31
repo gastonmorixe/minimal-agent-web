@@ -1,59 +1,81 @@
 /**
  * The web server: `Bun.serve` on localhost.
  *
- * Today it serves the built app (`app/dist`) and one demo route that streams
- * a canned golden run as an AI SDK UI message stream. The session API of spec
- * 4.2 (S53) and the bearer token of spec 4.5 (S57) come next and replace the
- * demo route.
+ * It serves the built app (`app/dist`) and the session API of spec 4.2
+ * (`api/routes.ts`) over a {@link SessionBackend}. Every `/api` request needs
+ * the bearer token (spec 4.5, `security/security.ts`). The static app does
+ * not: it holds no secret, and it reads the token from the URL fragment.
  *
  * @module server
  */
 
 import { resolve, sep } from "node:path"
 
-import { UI_MESSAGE_STREAM_HEADERS } from "./chat-stream/chunks.ts"
-import { GOLDEN_RUNS } from "./chat-stream/golden-runs.ts"
-import { encodeChatStream } from "./chat-stream/sse.ts"
+import { handleApi } from "./api/routes.ts"
+import type { SessionBackend } from "./backend/backend.ts"
+import { checkBindHost, checkToken, isAuthorized, unauthorized } from "./security/security.ts"
 
 /** Options for {@link startServer}. */
 export interface ServerOptions {
   /** Directory with the built app (`index.html` and its assets). */
   appDir: string
+  /** What answers the session API. */
+  backend: SessionBackend
+  /** The bearer token every `/api` request must carry. */
+  token: string
   /** Defaults to `127.0.0.1` (spec 4.5). */
   hostname?: string
   /** Defaults to 0 (a free port). */
   port?: number
+  /** Allow a non-loopback `hostname`. Off unless set on purpose. */
+  allowRemoteBind?: boolean
+  /** Time between SSE keep-alive comments. Default 15 s. */
+  keepAliveMs?: number
 }
 
-/** Path of the demo chat route. Removed when the session API lands (S53). */
-export const DEMO_CHAT_PATH = "/api/demo/chat"
+const DEFAULT_KEEP_ALIVE_MS = 15_000
 
-const DEMO_RUN = "tool-turn"
+/** Headers on every answer. No `Access-Control-*` header: no CORS (spec 4.5). */
+const SECURITY_HEADERS = {
+  "x-content-type-options": "nosniff",
+  "x-frame-options": "DENY",
+  "referrer-policy": "no-referrer",
+} as const
 
-/** Start the server. Stop it with `server.stop()`. */
+function withSecurityHeaders(response: Response): Response {
+  for (const [name, value] of Object.entries(SECURITY_HEADERS)) response.headers.set(name, value)
+  return response
+}
+
+/**
+ * Start the server. Stop it with `server.stop()`.
+ *
+ * @throws BindRefusedError for a non-loopback `hostname` without `allowRemoteBind`
+ */
 export function startServer(options: ServerOptions): ReturnType<typeof Bun.serve> {
+  const hostname = options.hostname ?? "127.0.0.1"
+  checkBindHost(hostname, options.allowRemoteBind ?? false)
+  checkToken(options.token)
   const appDir = resolve(options.appDir)
+  const { backend, token } = options
+  const keepAliveMs = options.keepAliveMs ?? DEFAULT_KEEP_ALIVE_MS
   return Bun.serve({
-    hostname: options.hostname ?? "127.0.0.1",
+    hostname,
     port: options.port ?? 0,
-    fetch(request) {
+    async fetch(request, server) {
       const { pathname } = new URL(request.url)
-      if (pathname === DEMO_CHAT_PATH && request.method === "POST") return demoChat()
       if (pathname === "/api" || pathname.startsWith("/api/")) {
-        return Response.json({ error: "not found" }, { status: 404 })
+        if (!isAuthorized(request, token)) return withSecurityHeaders(unauthorized())
+        // Streams stay open while a run waits; keep-alives replace the idle timeout.
+        server.timeout(request, 0)
+        return withSecurityHeaders(await handleApi(request, { backend, keepAliveMs }))
       }
       if (request.method !== "GET" && request.method !== "HEAD") {
-        return new Response("method not allowed", { status: 405 })
+        return withSecurityHeaders(new Response("method not allowed", { status: 405 }))
       }
-      return serveApp(appDir, pathname)
+      return withSecurityHeaders(await serveApp(appDir, pathname))
     },
   })
-}
-
-/** Stream the canned demo run, as the messages route will stream a real one. */
-function demoChat(): Response {
-  const run = GOLDEN_RUNS.find((candidate) => candidate.name === DEMO_RUN)
-  return new Response(encodeChatStream(run?.inputs ?? []), { headers: UI_MESSAGE_STREAM_HEADERS })
 }
 
 /**
@@ -75,6 +97,6 @@ async function serveApp(appDir: string, pathname: string): Promise<Response> {
   const file = Bun.file(target)
   if (target !== appDir && (await file.exists())) return new Response(file)
   const index = Bun.file(resolve(appDir, "index.html"))
-  if (await index.exists()) return new Response(index)
+  if (await index.exists()) return new Response(index, { headers: { "cache-control": "no-cache" } })
   return new Response("app not built: run `bun run build`", { status: 503 })
 }

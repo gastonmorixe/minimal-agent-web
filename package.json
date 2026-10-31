@@ -18,25 +18,32 @@
     "app"
   ],
   "scripts": {
+    "dev": "bun run scripts/dev.ts",
     "start": "bun run --cwd server start",
     "build": "bun run --cwd app build",
     "test": "bun test",
-    "typecheck": "bun run --cwd server typecheck && bun run --cwd app typecheck",
+    "test:e2e": "playwright test",
+    "typecheck": "bun run --cwd server typecheck && bun run --cwd app typecheck && tsc --noEmit -p e2e/tsconfig.json",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "biome:check": "biome check .",
     "biome:fix": "biome check --write .",
-    "check": "bun run typecheck && bun run lint && bun run format:check && bun run biome:check && bun run test && bun run build",
+    "check": "bun run typecheck && bun run lint && bun run format:check && bun run biome:check && bun run test && bun run build && bun run test:e2e",
     "prepare": "husky",
     "commitlint": "commitlint",
     "commitlint:last": "commitlint --last --verbose"
+  },
+  "dependencies": {
+    "@minimal-agent/core": "git+ssh://git@github.com/gastonmorixe/minimal-agent-core.git#446a7ddd70642ecc81ac452b3f109e8f6f7fd9cd"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.15",
     "@commitlint/cli": "^21.2.3",
     "@commitlint/config-conventional": "^21.2.3",
+    "@playwright/test": "1.56.1",
+    "@types/node": "^24",
     "eslint-plugin-jsdoc": "^63.3.3",
     "eslint-plugin-tsdoc": "^0.5.4",
     "husky": "^9.1.7",

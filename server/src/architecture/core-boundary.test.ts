@@ -8,6 +8,9 @@
  *   Node built-ins. In particular the AI SDK (`ai`) is a dev dependency for
  *   type checks and tests only (spec D24): source files may `import type`
  *   from it, never import it at runtime.
+ * - Core is declared once, by the repo root, so the umbrella's `link:dev`
+ *   can replace it with a local checkout (S60). A copy declared by `server/`
+ *   would shadow the link.
  */
 
 import { readdirSync, readFileSync } from "node:fs"
@@ -20,6 +23,7 @@ import coreManifest from "@minimal-agent/core/package.json"
 import serverManifest from "../../package.json"
 
 const SRC = resolve(import.meta.dir, "..")
+const REPO = resolve(SRC, "..", "..")
 const CORE = "@minimal-agent/core"
 const RUNTIME_ALLOWED = /^(?:node:|bun$|bun:)/u
 const TEST_ONLY_PACKAGES = new Set(["bun:test", "ai"])
@@ -109,10 +113,25 @@ describe("server import boundary", () => {
   })
 })
 
+interface Manifest {
+  dependencies?: Record<string, string>
+}
+
+function readManifest(path: string): Manifest {
+  const value: unknown = JSON.parse(readFileSync(join(REPO, path), "utf8"))
+  return typeof value === "object" && value !== null ? value : {}
+}
+
 describe("core dependency", () => {
-  test("is the only runtime dependency and is pinned", () => {
-    expect(Object.keys(serverManifest.dependencies)).toEqual([CORE])
-    expect(serverManifest.dependencies[CORE]).toMatch(PINNED_CORE_URL)
+  test("is the root's only runtime dependency and is pinned", () => {
+    const root = readManifest("package.json")
+    expect(Object.keys(root.dependencies ?? {})).toEqual([CORE])
+    expect(root.dependencies?.[CORE]).toMatch(PINNED_CORE_URL)
+  })
+
+  test("is not declared again by the server or the app", () => {
+    expect("dependencies" in serverManifest).toBe(false)
+    expect(readManifest("app/package.json").dependencies?.[CORE]).toBeUndefined()
   })
 
   test("installs the package named @minimal-agent/core", () => {
