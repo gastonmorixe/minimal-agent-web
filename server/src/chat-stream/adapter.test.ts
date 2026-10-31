@@ -130,7 +130,7 @@ describe("mapChatStreamInput", () => {
     ])
   })
 
-  test("maps a failed tool to tool-output-available with isError", () => {
+  test("maps a failed tool to tool-output-error", () => {
     const chunks = mapAll(
       events(
         { type: "turn_started", turn: 1 },
@@ -146,7 +146,12 @@ describe("mapChatStreamInput", () => {
         input: null,
         dynamic: true,
       },
-      { type: "tool-output-available", toolCallId: "t1", output: { isError: true }, dynamic: true },
+      {
+        type: "tool-output-error",
+        toolCallId: "t1",
+        errorText: "The tool reported an error.",
+        dynamic: true,
+      },
     ])
   })
 

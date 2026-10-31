@@ -6,10 +6,8 @@
   "license": "UNLICENSED",
   "scripts": {
     "start": "bun run src/main.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
-  },
-  "dependencies": {
-    "@minimal-agent/core": "git+ssh://git@github.com/gastonmorixe/minimal-agent-core.git#d231c709d9ecc4df223272f656d2597a4df3b495"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "dev": "bun --watch src/main.ts"
   },
   "devDependencies": {
     "ai": "7.0.159",
