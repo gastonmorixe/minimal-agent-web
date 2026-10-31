@@ -10,6 +10,8 @@ data: {"type":"text-end","id":"1:text"}
 
 data: {"type":"error","errorText":"The provider rejected the credential.\nLog in again."}
 
+data: {"type":"data-status","data":{"phase":"waiting_for_host","cause":"permanent"},"transient":true}
+
 data: {"type":"finish-step"}
 
 data: {"type":"finish","finishReason":"error"}

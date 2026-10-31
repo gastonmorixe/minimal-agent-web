@@ -1,6 +1,8 @@
 /**
- * Labels for core status phase codes. Core sends codes only (spec 3.2 of v1);
- * the frontend owns the words. Unknown codes show as they are.
+ * Labels for core status phase codes (`sending`, `receiving`, `running_tool`,
+ * `retrying`, `waiting_for_quota`, `waiting_for_host`). Core sends codes
+ * only (`@minimal-agent/core/sdk/events`'s `StatusPhase`); the frontend owns
+ * the words. Unknown codes show as they are, so a new phase still renders.
  *
  * @module chat/status-text
  */
@@ -14,6 +16,12 @@ function seconds(ms: number): string {
 /** One line for a status part. */
 export function statusText(status: StatusData): string {
   switch (status.phase) {
+    case "sending":
+      return "Sending the request"
+    case "receiving":
+      return "Writing"
+    case "running_tool":
+      return status.toolName === undefined ? "Running a tool" : `Running ${status.toolName}`
     case "retrying": {
       const wait = status.nextDelayMs === undefined ? "" : ` in ${seconds(status.nextDelayMs)}`
       const cause = status.cause === undefined ? "" : ` (${status.cause})`
@@ -25,23 +33,6 @@ export function statusText(status: StatusData): string {
         : `Waiting for the quota to reset at ${new Date(status.resetAt).toLocaleTimeString()}`
     case "waiting_for_host":
       return "Paused: waiting for the host"
-    case "connect":
-      return "Connecting"
-    case "upload":
-      return "Sending the request"
-    case "wait-headers":
-      return "Waiting for the model"
-    case "stream":
-    case "writing":
-      return "Writing"
-    case "thinking":
-      return "Thinking"
-    case "tool-input":
-    case "tool-dispatch":
-    case "tool-run":
-      return status.toolName === undefined ? "Running a tool" : `Running ${status.toolName}`
-    case "auth-refresh":
-      return "Refreshing the credential"
     default:
       return status.phase
   }

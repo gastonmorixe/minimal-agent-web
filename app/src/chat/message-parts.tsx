@@ -5,9 +5,14 @@
  * - Reasoning: a collapsible Trace line (`/docs/ai-elements/radix/reasoning`).
  * - Tool: a Trace line per call, mapped from the part state as the Tool
  *   pattern's state table says, with the output in a Code Block
- *   (`/docs/ai-elements/radix/tool`).
- * - Confirmation: a pending approval or question is an Item with actions,
- *   outside the Trace (`/docs/ai-elements/radix/confirmation`).
+ *   (`/docs/ai-elements/radix/tool`). Today's sessions never produce a tool
+ *   call (`backend/runtime-backend.ts`'s "no tools" scope note); this stays
+ *   ready for when one passes a `toolRegistry`.
+ * - Confirmation: a pending ask is an Item with actions, outside the Trace
+ *   (`/docs/ai-elements/radix/confirmation`). Core's `ask_user` (spec v1 S17)
+ *   is a plain multiple-choice question, never a tool approval — core has no
+ *   tool-approval concept at all — so this answers with one of the ask's
+ *   option ids, not an approve/deny boolean.
  *
  * Parts render in stream order. Runs of reasoning and tool parts share one
  * Trace, so text written between two tool rounds stays where it was said.
@@ -15,18 +20,11 @@
  * @module chat/message-parts
  */
 
-import {
-  CircleCheckIcon,
-  InfoIcon,
-  LoaderCircleIcon,
-  MessageCircleQuestionIcon,
-  TerminalIcon,
-} from "lucide-react"
+import { CircleCheckIcon, InfoIcon, LoaderCircleIcon, TerminalIcon } from "lucide-react"
 import * as React from "react"
-import type { AskAnswer, AskUserData, ChatMessage, ChatPart } from "@/api/types.ts"
+import type { AskUserData, ChatMessage, ChatPart } from "@/api/types.ts"
 import { Button } from "@/components/ui/button"
 import { CodeBlock, CodeBlockContent } from "@/components/ui/code-block"
-import { Input } from "@/components/ui/input"
 import {
   Item,
   ItemActions,
@@ -51,10 +49,8 @@ type ReasoningPart = Extract<ChatPart, { type: "reasoning" }>
 
 /** What the message needs from the chat to answer an ask. */
 export interface AskHandlers {
-  /** Approve or deny the tool call behind approval `approvalId`. */
-  onApproval: (approvalId: string, approved: boolean) => void
-  /** Answer a free-form question. */
-  onAnswer: (askId: string, answer: AskAnswer) => void
+  /** Answer ask `askId` with the id of the chosen option, or `null` to decline. */
+  onAnswer: (askId: string, answer: string | null) => void
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -109,22 +105,9 @@ function ReasoningLine({ part }: { part: ReasoningPart }) {
   )
 }
 
-/** One tool call, as the Tool pattern's state table maps it. */
+/** One tool call, as the Tool pattern's state table maps it. No approval state exists (see the module doc). */
 export function ToolLine({ part, streaming }: { part: ToolPart; streaming: boolean }) {
   const subject = [part.toolName, toolInputText(part.input)].filter(Boolean).join(" ")
-  const denied =
-    part.state === "output-denied" ||
-    (part.state === "approval-responded" && !part.approval.approved)
-  if (denied) {
-    return (
-      <TraceLine data-testid="tool" data-state="denied">
-        <TraceIcon>
-          <TerminalIcon />
-        </TraceIcon>
-        <TraceTitle>Denied {subject}</TraceTitle>
-      </TraceLine>
-    )
-  }
   if (part.state === "output-available" || part.state === "output-error") {
     const failed = part.state === "output-error"
     const view = failed ? { text: part.errorText, facts: "" } : toolOutputView(part.output)
@@ -156,7 +139,7 @@ export function ToolLine({ part, streaming }: { part: ToolPart; streaming: boole
       </TraceCollapsible>
     )
   }
-  // input-streaming, input-available, approved approval-responded: running while the chat streams.
+  // input-streaming, input-available: running while the chat streams.
   return (
     <TraceLine status={streaming ? "running" : "error"} data-testid="tool" data-state={part.state}>
       <TraceIcon>
@@ -169,119 +152,46 @@ export function ToolLine({ part, streaming }: { part: ToolPart; streaming: boole
   )
 }
 
-/** Confirmation: approve or deny a tool call before it runs. */
-export function ApprovalRequest({
-  part,
-  onApproval,
-}: {
-  part: ToolPart
-  onApproval: AskHandlers["onApproval"]
-}) {
-  const approvalId = part.approval?.id
-  const subject = toolInputText(part.input) || part.toolName
-  return (
-    <Item variant="outline" size="sm" data-testid="approval">
-      <ItemMedia variant="icon">
-        <TerminalIcon />
-      </ItemMedia>
-      <ItemContent>
-        <ItemTitle>
-          Run {part.toolName} {toolInputText(part.input)}?
-        </ItemTitle>
-        <ItemDescription>The agent waits until you answer. Approve runs {subject}.</ItemDescription>
-      </ItemContent>
-      <ItemActions>
-        <Button
-          size="sm"
-          variant="outline"
-          disabled={approvalId === undefined}
-          onClick={() => approvalId !== undefined && onApproval(approvalId, false)}
-        >
-          Deny
-        </Button>
-        <Button
-          size="sm"
-          disabled={approvalId === undefined}
-          onClick={() => approvalId !== undefined && onApproval(approvalId, true)}
-        >
-          Approve
-        </Button>
-      </ItemActions>
-    </Item>
-  )
-}
-
-/** Confirmation for a free-form `ask_user`: options as buttons, or a typed answer. */
-export function QuestionRequest({
+/** Confirmation for a preflight ask: its options as buttons, each answering with that option's id. */
+export function AskRequest({
   data,
   onAnswer,
 }: {
   data: AskUserData
   onAnswer: AskHandlers["onAnswer"]
 }) {
-  const [text, setText] = React.useState("")
   const [sent, setSent] = React.useState<string | null>(null)
-  if (data.status === "answered") {
-    return (
-      <TraceLine data-testid="question" data-state="answered">
-        <TraceIcon>
-          <MessageCircleQuestionIcon />
-        </TraceIcon>
-        <TraceTitle>
-          {data.question} {data.answer}
-        </TraceTitle>
-      </TraceLine>
-    )
-  }
-  const answer = (value: string) => {
-    if (value.trim().length === 0) return
-    setSent(value)
-    onAnswer(data.askId, { kind: "text", text: value })
+  const answer = (optionId: string | null): void => {
+    setSent(optionId)
+    onAnswer(data.askId, optionId)
   }
   return (
-    <Item variant="outline" size="sm" data-testid="question" data-state="pending">
+    <Item variant="outline" size="sm" data-testid="ask">
       <ItemMedia variant="icon">
-        <MessageCircleQuestionIcon />
+        <TerminalIcon />
       </ItemMedia>
       <ItemContent>
-        <ItemTitle>{data.question}</ItemTitle>
-        <ItemDescription>
-          {sent === null ? "The agent waits until you answer." : `Sending "${sent}"...`}
+        <ItemTitle>{data.title}</ItemTitle>
+        <ItemDescription className="whitespace-pre-wrap">
+          {sent === null ? data.detail : `Answered "${sent}".`}
         </ItemDescription>
-        <form
-          className="mt-2 flex gap-2"
-          onSubmit={(event) => {
-            event.preventDefault()
-            answer(text)
-          }}
-        >
-          <Input
-            value={text}
-            onChange={(event) => setText(event.target.value)}
-            placeholder="Type an answer"
-            aria-label="Answer"
-            className="h-8"
-          />
-          <Button size="sm" type="submit" disabled={text.trim().length === 0 || sent !== null}>
-            Answer
-          </Button>
-        </form>
       </ItemContent>
-      {data.options !== undefined && data.options.length > 0 && (
-        <ItemActions>
-          {data.options.map((option) => (
-            <Button
-              key={option}
-              size="sm"
-              variant="outline"
-              disabled={sent !== null}
-              onClick={() => answer(option)}
-            >
-              {option}
-            </Button>
-          ))}
-        </ItemActions>
-      )}
+      <ItemActions>
+        <Button size="sm" variant="outline" disabled={sent !== null} onClick={() => answer(null)}>
+          Decline
+        </Button>
+        {data.options.map((option) => (
+          <Button
+            key={option.id}
+            size="sm"
+            variant={option.destructive === true ? "destructive" : "default"}
+            disabled={sent !== null}
+            onClick={() => answer(option.id)}
+          >
+            {option.label}
+          </Button>
+        ))}
+      </ItemActions>
     </Item>
   )
 }
@@ -315,7 +225,7 @@ function blocks(parts: ChatPart[]): Block[] {
   for (const part of parts) {
     const isActivity =
       part.type === "reasoning" ||
-      (part.type === "dynamic-tool" && part.state !== "approval-requested") ||
+      part.type === "dynamic-tool" ||
       part.type === "data-notice" ||
       (part.type === "data-usage" && part.data.kind === "quota")
     const last = out.at(-1)
@@ -377,17 +287,9 @@ export function AssistantParts({
                 {part.text}
               </p>
             )
-          case "dynamic-tool":
-            return (
-              <ApprovalRequest key={part.toolCallId} part={part} onApproval={handlers.onApproval} />
-            )
           case "data-ask-user":
             return (
-              <QuestionRequest
-                key={part.data.askId}
-                data={part.data}
-                onAnswer={handlers.onAnswer}
-              />
+              <AskRequest key={part.data.askId} data={part.data} onAnswer={handlers.onAnswer} />
             )
           default:
             return null

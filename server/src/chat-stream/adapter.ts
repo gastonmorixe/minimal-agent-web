@@ -1,5 +1,6 @@
 /**
- * Chat stream adapter (spec 4.3, S54): core events in, UI message stream parts out.
+ * Chat stream adapter (spec 4.3, S54, updated for S53): core events in, UI
+ * message stream parts out.
  *
  * {@link mapChatStreamInput} is a pure reducer. It takes the adapter state and
  * one input, and returns the next state and the parts to send. The server folds
@@ -17,12 +18,10 @@
  * | `item_completed` text     | `text-end`                                         |
  * | `item_completed` thinking | `reasoning-end`                                    |
  * | `item_completed` tool_use | `tool-input-available` (`input: null`)             |
- * | `tool_call`               | `tool-input-available` (`input: inputSummary`)     |
+ * | `tool_call`               | `tool-input-available` (real `input`)              |
  * | `tool_output`             | `tool-output-available` (`preliminary: true`)      |
- * | `tool_result`             | `tool-output-available`, `-error`, or `-denied`    |
- * | `ask_user` approval       | `tool-approval-request`                            |
- * | `ask_user` question       | `data-ask-user`                                    |
- * | `ask_answered`            | `tool-approval-response`, or `data-ask-user`       |
+ * | `tool_result`             | `tool-output-available` or `tool-output-error`     |
+ * | `ask_user`                | `data-ask-user`                                    |
  * | `status`                  | `data-status` (transient)                          |
  * | `quota`                   | `data-usage` (`kind: "quota"`)                     |
  * | `user_message`            | nothing (the client already has it)                |
@@ -30,19 +29,23 @@
  * | `error`                   | `error` (`errorText`)                              |
  * | `run_finished`, run end   | `finish` (then `data: [DONE]`, added by `sse.ts`)  |
  *
- * Today's core (the nine `AgentEvent` kinds) has no run start or run end
- * event, so the host sends `run_started` and `run_ended` itself. The kinds
- * core phase 3 adds (`run_finished`, `tool_call`, `tool_output`, `status`,
- * `ask_user`, `quota`, `user_message`) are mapped from the mirror in
- * `core-mirror/events.ts` until core exports them. The switch in
- * {@link mapAgentEvent} ends in a `never` check, so a new kind fails
- * typecheck until it is mapped here.
+ * Core has no run start or run end event, so the host sends `run_started`
+ * and `run_ended` itself (`run_finished` ends the UI message at `finish`,
+ * but the host still needs `run_started` for cases that start the stream
+ * before the first core event, e.g. an empty history replay). The switch in
+ * {@link mapAgentEvent} ends in a `never` check, so a new `AgentEvent` kind
+ * fails typecheck here until it is mapped.
  *
- * Tool parts: the part opens at the first event that names the call. An
- * approval ask always follows an open part, because the AI SDK client
- * rejects an approval for an unknown call. `tool_output` text accumulates
- * per call (capped at {@link TOOL_TEXT_CAP} characters) and is sent as a
- * preliminary output. A denied call ends as `tool-output-denied`.
+ * Tool parts: the part opens at the first event that names the call
+ * (`item_completed` tool_use, or `tool_call` if that arrives first). `ask_user`
+ * is NOT a tool-approval request — core has no tool-approval concept at all
+ * (see `backend/runtime-backend.ts`'s "no tools" scope note: today's sessions
+ * never produce `tool_call` / `tool_output` / `tool_result` in the first
+ * place). It is a preflight multiple-choice question, mapped to a plain
+ * `data-ask-user` part; there is no "answered" event from core, so the part
+ * always carries `options` and the client marks it answered itself. `tool_output`
+ * text accumulates per call (capped at {@link TOOL_TEXT_CAP} characters) and is
+ * sent as a preliminary output.
  *
  * Deltas are opt-in in core (`emitDeltas`). Without them, `item_completed`
  * carries the whole text, and the adapter sends start, delta, and end at
@@ -50,32 +53,23 @@
  * the part. A consumer uses one or the other, never both (see core's
  * `TextDeltaEvent` docs).
  *
- * Today's core puts no tool input or output in its events: without
- * `tool_call` the input stays `null`, and without the S19 facts the output is
- * `{ isError: false }`.
- *
  * @module chat-stream/adapter
  */
 
-import type { TurnCompletedEvent } from "@minimal-agent/core/sdk/events"
-
-import type {
-  AskAnswer,
-  AskUserEvent,
-  RunOutcome,
-  ToolResultFactsEvent,
-  WebAgentEvent,
-} from "../core-mirror/events.ts"
+import type { AgentEvent, TurnCompletedEvent } from "@minimal-agent/core/sdk/events"
 
 import type { UiFinishReason, UiMessageChunk } from "./chunks.ts"
 
 /** Core's canonical stop reason, as `turn_completed` reports it. */
 type StopReason = NonNullable<TurnCompletedEvent["stopReason"]>
 
+/** Core's run outcome, as `run_finished` reports it. */
+type RunOutcome = Extract<AgentEvent, { type: "run_finished" }>["outcome"]
+
 /** One input to the adapter: a core event, or a run boundary from the host. */
 export type ChatStreamInput =
   | { kind: "run_started"; messageId?: string }
-  | { kind: "event"; event: WebAgentEvent }
+  | { kind: "event"; event: AgentEvent }
   | { kind: "run_ended" }
 
 /** The adapter state between inputs. Treat it as opaque. */
@@ -100,10 +94,6 @@ export interface ChatStreamState {
   readonly errored: boolean
   /** Tool calls with an open tool part, and their tool names. */
   readonly tools: Readonly<Record<string, string>>
-  /** Asks sent and not answered yet, by `askId`. */
-  readonly asks: Readonly<Record<string, AskUserEvent>>
-  /** Tool calls the person denied. */
-  readonly denied: readonly string[]
   /** `tool_output` text so far, by call id. */
   readonly toolText: Readonly<Record<string, string>>
   /** The outcome from `run_finished`, if it arrived. */
@@ -125,8 +115,6 @@ export const INITIAL_CHAT_STREAM_STATE: ChatStreamState = {
   lastStopReason: undefined,
   errored: false,
   tools: {},
-  asks: {},
-  denied: [],
   toolText: {},
   outcome: undefined,
 }
@@ -174,7 +162,7 @@ export function mapChatStreamInput(state: ChatStreamState, input: ChatStreamInpu
 }
 
 /** Map one core event. One case per `AgentEvent` kind. */
-function mapAgentEvent(draft: Draft, event: WebAgentEvent, chunks: UiMessageChunk[]): void {
+function mapAgentEvent(draft: Draft, event: AgentEvent, chunks: UiMessageChunk[]): void {
   switch (event.type) {
     case "turn_started":
       endStep(draft, chunks)
@@ -216,7 +204,7 @@ function mapAgentEvent(draft: Draft, event: WebAgentEvent, chunks: UiMessageChun
         type: "tool-input-available",
         toolCallId: event.callId,
         toolName: event.toolName,
-        input: event.inputSummary,
+        input: event.input,
         dynamic: true,
       })
       return
@@ -238,10 +226,17 @@ function mapAgentEvent(draft: Draft, event: WebAgentEvent, chunks: UiMessageChun
       return
     case "ask_user":
       openStep(draft, chunks)
-      mapAskUser(draft, event, chunks)
-      return
-    case "ask_answered":
-      mapAskAnswered(draft, event.askId, event.answer, chunks)
+      chunks.push({
+        type: "data-ask-user",
+        id: event.askId,
+        data: {
+          askId: event.askId,
+          code: event.code,
+          title: event.title,
+          detail: event.detail,
+          options: event.options,
+        },
+      })
       return
     case "status": {
       const { type: _type, ...data } = event
@@ -289,7 +284,7 @@ function mapAgentEvent(draft: Draft, event: WebAgentEvent, chunks: UiMessageChun
   }
 }
 
-type ItemCompleted = Extract<WebAgentEvent, { type: "item_completed" }>
+type ItemCompleted = Extract<AgentEvent, { type: "item_completed" }>
 
 function mapItemCompleted(draft: Draft, event: ItemCompleted, chunks: UiMessageChunk[]): void {
   switch (event.itemType) {
@@ -312,17 +307,19 @@ function mapItemCompleted(draft: Draft, event: ItemCompleted, chunks: UiMessageC
       if (event.text) chunks.push({ type: "reasoning-delta", id: event.id, delta: event.text })
       chunks.push({ type: "reasoning-end", id: event.id })
       return
-    case "tool_use":
+    case "tool_use": {
       // For a tool_use item, core puts the tool name in `text`.
-      openTool(draft, event.id, event.text ?? "")
+      const toolName = event.text ?? ""
+      openTool(draft, event.id, toolName)
       chunks.push({
         type: "tool-input-available",
         toolCallId: event.id,
-        toolName: event.text ?? "",
+        toolName,
         input: null,
         dynamic: true,
       })
       return
+    }
     default:
       unmapped(event.itemType)
   }
@@ -372,9 +369,10 @@ function appendToolText(
   return { text: kept, truncated: truncated || capped, totalBytes }
 }
 
-/** The final chunk of a tool call: its output, its error, or the denial. */
-function toolResultChunk(draft: Draft, event: ToolResultFactsEvent): UiMessageChunk {
-  if (draft.denied.includes(event.id)) return { type: "tool-output-denied", toolCallId: event.id }
+type ToolResult = Extract<AgentEvent, { type: "tool_result" }>
+
+/** The final chunk of a tool call: its output, or its error. */
+function toolResultChunk(draft: Draft, event: ToolResult): UiMessageChunk {
   if (event.isError) {
     return {
       type: "tool-output-error",
@@ -395,80 +393,6 @@ function toolResultChunk(draft: Draft, event: ToolResultFactsEvent): UiMessageCh
     },
     dynamic: true,
   }
-}
-
-function mapAskUser(draft: Draft, event: AskUserEvent, chunks: UiMessageChunk[]): void {
-  draft.asks = { ...draft.asks, [event.askId]: event }
-  if (event.kind === "approval" && event.callId !== undefined) {
-    const { callId } = event
-    const toolName = event.toolName ?? draft.tools[callId] ?? ""
-    if (event.inputSummary === undefined) ensureTool(draft, chunks, callId, toolName)
-    else {
-      // The ask names the input the person approves; show it on the part.
-      openTool(draft, callId, toolName)
-      chunks.push({
-        type: "tool-input-available",
-        toolCallId: callId,
-        toolName,
-        input: event.inputSummary,
-        dynamic: true,
-      })
-    }
-    chunks.push({
-      type: "tool-approval-request",
-      approvalId: event.askId,
-      toolCallId: event.callId,
-    })
-    return
-  }
-  chunks.push({
-    type: "data-ask-user",
-    id: event.askId,
-    data: {
-      askId: event.askId,
-      question: event.question,
-      ...(event.options === undefined ? {} : { options: event.options }),
-      status: "pending",
-    },
-  })
-}
-
-function mapAskAnswered(
-  draft: Draft,
-  askId: string,
-  answer: AskAnswer,
-  chunks: UiMessageChunk[],
-): void {
-  const ask = draft.asks[askId]
-  if (ask === undefined) return
-  const { [askId]: _answered, ...rest } = draft.asks
-  draft.asks = rest
-  if (ask.kind === "approval" && ask.callId !== undefined && answer.kind === "approval") {
-    chunks.push({
-      type: "tool-approval-response",
-      approvalId: askId,
-      approved: answer.approved,
-      ...(answer.reason === undefined ? {} : { reason: answer.reason }),
-    })
-    if (!answer.approved) draft.denied = [...draft.denied, ask.callId]
-    return
-  }
-  chunks.push({
-    type: "data-ask-user",
-    id: askId,
-    data: {
-      askId,
-      question: ask.question,
-      ...(ask.options === undefined ? {} : { options: ask.options }),
-      status: "answered",
-      answer: answerText(answer),
-    },
-  })
-}
-
-function answerText(answer: AskAnswer): string {
-  if (answer.kind === "text") return answer.text
-  return answer.approved ? "approved" : "denied"
 }
 
 function openStep(draft: Draft, chunks: UiMessageChunk[]): void {

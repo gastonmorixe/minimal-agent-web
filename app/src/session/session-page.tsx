@@ -11,7 +11,7 @@
 import { ActivityIcon, MessageSquareIcon } from "lucide-react"
 import * as React from "react"
 import { getSession } from "@/api/client.ts"
-import type { BackendKind, ChatMessage, SessionSummary } from "@/api/types.ts"
+import type { ChatMessage, SessionSummary } from "@/api/types.ts"
 import { ChatView } from "@/chat/chat-view.tsx"
 import { ContextMeter } from "@/chat/context-meter.tsx"
 import { type DecodedMessage, decodeHistory } from "@/chat/history.ts"
@@ -24,7 +24,7 @@ type Loaded =
   | { kind: "loading" }
   | { kind: "missing" }
   | { kind: "error"; message: string }
-  | { kind: "ready"; backend: BackendKind; session: SessionSummary; initial: DecodedMessage[] }
+  | { kind: "ready"; session: SessionSummary; initial: DecodedMessage[] }
 
 /** Props of {@link SessionPage}. */
 export interface SessionPageProps {
@@ -55,8 +55,7 @@ export function SessionPage({ id, view, summary, onView, onActivity }: SessionPa
           return
         }
         const initial = await decodeHistory(detail.history)
-        if (!cancelled)
-          setLoaded({ kind: "ready", backend: detail.backend, session: detail.session, initial })
+        if (!cancelled) setLoaded({ kind: "ready", session: detail.session, initial })
       } catch (error) {
         if (!cancelled)
           setLoaded({
@@ -80,8 +79,8 @@ export function SessionPage({ id, view, summary, onView, onActivity }: SessionPa
   if (loaded.kind === "missing") {
     return (
       <p className="p-6 text-sm text-muted-foreground">
-        No session {id}. The fake backend keeps sessions in memory, so they are gone after a server
-        restart.
+        No session {id}. Sessions are in memory only unless MA_WEB_PERSIST_DIR is set, so they are
+        gone after a server restart.
       </p>
     )
   }
@@ -128,7 +127,6 @@ export function SessionPage({ id, view, summary, onView, onActivity }: SessionPa
         <ChatView
           key={id}
           sessionId={id}
-          backend={loaded.backend}
           initial={loaded.initial}
           runActive={run.active}
           finishedRuns={run.finishedRuns}

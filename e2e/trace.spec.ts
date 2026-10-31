@@ -1,4 +1,4 @@
-/** The trace view (S56) end to end: live log, reload-resume, waits, diagnostics, usage. */
+/** The trace view (S56, updated for S53) end to end: live log, reload-resume, waits, diagnostics, usage. */
 
 import { expect, type Page, test } from "@playwright/test"
 
@@ -18,10 +18,9 @@ test("the trace view replays the log after a reload and keeps streaming live", a
   await send(page, "a long run please")
   await page.getByRole("tab", { name: "Trace" }).click()
   await expect(page).toHaveURL(/\/trace$/u)
-  await expect
-    .poll(async () => (await counts(page)).entries, { timeout: 10_000 })
-    .toBeGreaterThan(30)
+  await expect.poll(async () => (await counts(page)).entries, { timeout: 5_000 }).toBeGreaterThan(3)
   const before = await counts(page)
+  await expect(page.getByTestId("trace-run")).toHaveAttribute("data-outcome", "running")
 
   await page.reload()
   await expect(page).toHaveURL(/\/trace$/u)
@@ -38,34 +37,41 @@ test("the trace view replays the log after a reload and keeps streaming live", a
   expect(after.entries).toBeGreaterThan(before.entries)
   // Seqs start at 0 and have no gap and no duplicate.
   expect(after.entries).toBe(after.lastSeq + 1)
-  await expect(page.getByTestId("trace-round")).toHaveCount(4)
-  await expect(page.getByTestId("trace-tool")).toHaveCount(3)
-  await expect(page.getByTestId("trace-tool").first()).toContainText("Ran Grep pattern-1")
+  await expect(page.getByTestId("trace-round")).toHaveCount(1)
 })
 
-test("retries and quota waits show in the timeline, diagnostics filter by severity", async ({
-  page,
-}) => {
+test("a retry shows in the timeline, diagnostics filter by severity", async ({ page }) => {
   await openApp(page)
   await newSession(page)
-  await send(page, "retry until it works")
+  await send(page, "please retry this one")
   await turnDone(page)
   await page.getByRole("tab", { name: "Trace" }).click()
   const waits = page.getByTestId("trace-wait")
-  await expect(waits.filter({ hasText: "Retry after attempt 1 (overloaded)" })).toBeVisible()
-  await expect(waits.filter({ hasText: "Retry after attempt 2 (overloaded)" })).toBeVisible()
-  await expect(waits.filter({ hasText: "Quota fake 100/100" })).toBeVisible()
-  await expect(page.locator('[data-testid="trace-wait"][data-kind="quota"]')).toHaveCount(2)
+  await expect(waits.filter({ hasText: "Retry after attempt" })).toHaveCount(2)
+  await expect(page.locator('[data-testid="trace-wait"][data-kind="retry"]')).toHaveCount(2)
 
   await page.getByRole("tab", { name: /Diagnostics/u }).click()
   const all = await page.getByTestId("diagnostic").count()
-  expect(all).toBeGreaterThan(3)
+  expect(all).toBeGreaterThan(2)
   await page.getByTestId("severity-filter").click()
   await page.getByRole("option", { name: "warning and worse" }).click()
-  await expect(page.getByTestId("diagnostic")).toHaveCount(2)
-  await expect(page.getByTestId("diagnostic").first()).toContainText("transport.retry")
+  const warnings = await page.getByTestId("diagnostic").count()
+  expect(warnings).toBeGreaterThan(0)
+  expect(warnings).toBeLessThan(all)
 
   await page.getByRole("tab", { name: "Token usage" }).click()
   await expect(page.getByTestId("usage-input")).toBeVisible()
   await expect(page.getByTestId("usage-table").locator("tbody tr")).toHaveCount(1)
+})
+
+test("a quota wait shows in the timeline", async ({ page }) => {
+  await openApp(page)
+  await newSession(page)
+  await send(page, "mind the quota please")
+  await turnDone(page)
+  await page.getByRole("tab", { name: "Trace" }).click()
+  await expect(page.locator('[data-testid="trace-wait"][data-kind="quota"]')).toHaveCount(1)
+  await expect(
+    page.getByTestId("trace-wait").filter({ hasText: "Waiting for quota" }),
+  ).toBeVisible()
 })

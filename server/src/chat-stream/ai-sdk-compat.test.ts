@@ -151,7 +151,7 @@ describe("AI SDK compatibility", () => {
     ])
   })
 
-  test("tool turn decodes to a dynamic tool with its output, across two steps", async () => {
+  test("tool turn decodes to a dynamic tool with its real input and output, across two steps", async () => {
     const { message, errors } = await decode("tool-turn")
     expect(errors).toEqual([])
     expect(message?.parts).toMatchObject([
@@ -162,14 +162,27 @@ describe("AI SDK compatibility", () => {
         toolName: "Read",
         toolCallId: "toolu_01",
         state: "output-available",
-        input: null,
-        output: { isError: false },
+        input: { path: "README.md" },
+        output: { isError: false, summary: "3 lines", durationMs: 12, text: "# demo\n" },
       },
       { type: "data-usage", data: { turn: 1 } },
       { type: "step-start" },
       { type: "text", text: "The file has three lines.", state: "done" },
       { type: "data-usage", data: { turn: 2 } },
     ])
+  })
+
+  test("a failed tool decodes to output-error", async () => {
+    const { message, errors } = await decode("tool-error-turn")
+    expect(errors).toEqual([])
+    expect(message?.parts[1]).toMatchObject({
+      type: "dynamic-tool",
+      toolCallId: "toolu_02",
+      toolName: "Bash",
+      state: "output-error",
+      input: { command: "false" },
+      errorText: "exit code 1",
+    })
   })
 
   test("error run surfaces errorText and keeps the partial text", async () => {
@@ -195,70 +208,46 @@ describe("AI SDK compatibility", () => {
     ])
   })
 
-  test("approval run decodes to an approved tool with its streamed and final output", async () => {
-    const { message, errors } = await decode("approval-turn")
-    expect(errors).toEqual([])
-    expect(message?.parts).toMatchObject([
-      { type: "step-start" },
-      {
-        type: "dynamic-tool",
-        toolName: "Bash",
-        toolCallId: "toolu_02",
-        state: "output-available",
-        input: "rm -rf dist",
-        approval: { id: "ask_1", approved: true },
-        output: {
-          isError: false,
-          summary: "2 files removed",
-          durationMs: 120,
-          text: "removed dist/a.js\nremoved dist/b.js\n",
-        },
-      },
-      { type: "data-usage", data: { turn: 1 } },
-      { type: "step-start" },
-      { type: "text", text: "Removed the dist folder.", state: "done" },
-      { type: "data-usage", data: { turn: 2 } },
-    ])
-  })
-
-  test("denied run decodes to an output-denied tool with the reason", async () => {
-    const { message, errors } = await decode("denied-turn")
-    expect(errors).toEqual([])
-    expect(message?.parts[1]).toMatchObject({
-      type: "dynamic-tool",
-      toolCallId: "toolu_03",
-      state: "output-denied",
-      approval: { id: "ask_2", approved: false, reason: "Keep it." },
-    })
-  })
-
-  test("question run decodes to one ask-user part, updated in place with the answer", async () => {
-    const { message, errors } = await decode("question-turn")
+  test("a preflight ask decodes to one data-ask-user part with its options", async () => {
+    const { message, errors } = await decode("ask-turn")
     expect(errors).toEqual([])
     const asks = message?.parts.filter((part) => part.type === "data-ask-user") ?? []
     expect(asks).toEqual([
       {
         type: "data-ask-user",
-        id: "ask_3",
+        id: "ask_1",
         data: {
-          askId: "ask_3",
-          question: "Which branch?",
-          options: ["main", "dev"],
-          status: "answered",
-          answer: "dev",
+          askId: "ask_1",
+          code: "signed_thinking_mismatch",
+          title: "Thinking signed by another model",
+          detail: "The last turn's reasoning was signed by a different model.\nKeep it or drop it?",
+          options: [
+            { id: "keep", label: "Keep it", isDefault: true },
+            { id: "drop", label: "Drop it", destructive: true },
+          ],
         },
       },
     ])
   })
 
-  test("retry run keeps status out of the message and the quota as usage", async () => {
+  test("retry run keeps status out of the message", async () => {
     const { message, errors } = await decode("retry-turn")
     expect(errors).toEqual([])
     expect(message?.parts.some((part) => part.type === "data-status")).toBe(false)
     expect(message?.parts).toMatchObject([
       { type: "step-start" },
-      { type: "data-usage", id: "quota:fake", data: { kind: "quota", provider: "fake" } },
-      { type: "text", text: "Done after the wait.", state: "done" },
+      { type: "text", text: "Done after two retries.", state: "done" },
+      { type: "data-usage", data: { kind: "turn", turn: 1 } },
+    ])
+  })
+
+  test("quota run surfaces the quota as usage, status stays out of the message", async () => {
+    const { message, errors } = await decode("quota-turn")
+    expect(errors).toEqual([])
+    expect(message?.parts).toMatchObject([
+      { type: "step-start" },
+      { type: "data-usage", id: "quota:scripted", data: { kind: "quota", provider: "scripted" } },
+      { type: "text", text: "Done after the quota wait.", state: "done" },
       { type: "data-usage", data: { kind: "turn", turn: 1 } },
     ])
   })

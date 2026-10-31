@@ -45,13 +45,18 @@ function session(): SessionEntry[] {
     ev({
       type: "ask_user",
       askId: "a1",
-      kind: "approval",
-      question: "Run it?",
+      code: "signed_thinking_mismatch",
+      title: "Run it?",
+      detail: "Keep the plan?",
+      options: [{ id: "keep", label: "Keep it" }],
+    }),
+    ev({
+      type: "tool_call",
       callId: "c1",
       toolName: "Bash",
+      input: { command: "rm -rf dist" },
+      inputSummary: "rm -rf dist",
     }),
-    ev({ type: "ask_answered", askId: "a1", answer: { kind: "approval", approved: true } }),
-    ev({ type: "tool_call", callId: "c1", toolName: "Bash", inputSummary: "rm -rf dist" }),
     ev({ type: "tool_output", callId: "c1", toolName: "Bash", text: "a\n" }),
     ev({ type: "tool_output", callId: "c1", toolName: "Bash", text: "b\n" }),
     ev({
@@ -103,7 +108,7 @@ describe("buildTrace", () => {
     expect(model.runs[1]?.rounds[0]?.endedAt).toBeUndefined()
   })
 
-  test("collects tool calls with input, output, duration, approval, and state", () => {
+  test("collects tool calls with input, output, duration, and state", () => {
     const tools = model.runs[0]?.rounds[0]?.tools ?? []
     expect(tools).toHaveLength(2)
     expect(tools[0]).toMatchObject({
@@ -113,7 +118,6 @@ describe("buildTrace", () => {
       output: "a\nb\n",
       summary: "2 removed",
       durationMs: 120,
-      approval: "approved",
       state: "done",
     })
     // Without durationMs, the duration is the time between the entries.
@@ -125,7 +129,7 @@ describe("buildTrace", () => {
     expect(waits.map((wait) => wait.kind)).toEqual(["retry", "quota", "quota", "ask"])
     expect(waits[0]).toMatchObject({ attempt: 1, nextDelayMs: 1000, cause: "overloaded" })
     expect(waits[1]).toMatchObject({ provider: "fake", used: 100, limit: 100 })
-    expect(waits[3]).toMatchObject({ question: "Run it?", answer: "approved" })
+    expect(waits[3]).toMatchObject({ title: "Run it?" })
     expect(waitText(waits[0] ?? { seq: 0, ts: 0, kind: "host" })).toBe(
       "Retry after attempt 1 (overloaded), next try in 1.0s",
     )
@@ -141,22 +145,6 @@ describe("buildTrace", () => {
       [1, 100, 10],
       [2, 250, 14],
     ])
-  })
-
-  test("a deny marks the call denied", () => {
-    seq = 0
-    const denied = buildTrace([
-      ev({ type: "user_message", text: "x" }),
-      ev({ type: "turn_started", turn: 1 }),
-      ev({ type: "item_completed", itemType: "tool_use", id: "c", text: "Bash" }),
-      ev({ type: "ask_user", askId: "a", kind: "approval", question: "?", callId: "c" }),
-      ev({ type: "ask_answered", askId: "a", answer: { kind: "approval", approved: false } }),
-      ev({ type: "tool_result", id: "c", name: "Bash", isError: true }),
-    ])
-    expect(denied.runs[0]?.rounds[0]?.tools[0]).toMatchObject({
-      approval: "denied",
-      state: "denied",
-    })
   })
 
   test("the same entries always build the same model (reload replays from seq 0)", () => {

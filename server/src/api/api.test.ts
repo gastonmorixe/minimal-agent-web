@@ -1,8 +1,16 @@
 /**
- * Server integration tests: the HTTP API of spec 4.2 over the fake backend,
- * read through a real `Bun.serve` and, for the chat stream, through the AI
- * SDK's client decode path (`DefaultChatTransport`, `readUIMessageStream`).
- * The core-backed version of these tests comes with S53.
+ * Server integration tests: the HTTP API of spec 4.2 over `RuntimeBackend`
+ * (S53), through a real `Bun.serve`, a real `createRuntime`, and the
+ * deterministic scripted transport — not a canned event-sequence stub. The
+ * chat stream is also read through the AI SDK's own client decode path
+ * (`DefaultChatTransport`, `readUIMessageStream`).
+ *
+ * `ask_user` (a preflight ask) and `tool_call` never fire here: neither can
+ * happen without a registered model provider or a tool registry, and this
+ * backend has neither on purpose (see `backend/runtime-backend.ts`'s module
+ * doc). Their wire mapping is covered at the adapter level instead
+ * (`chat-stream/golden-runs.ts`'s `ask-turn` / `tool-turn` / `tool-error-turn`).
+ * `RuntimeBackend.answer`'s `no_such_ask` error path is covered here directly.
  */
 
 import { mkdtempSync, rmSync } from "node:fs"
@@ -11,27 +19,38 @@ import { join } from "node:path"
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 
+import type { SessionEntry } from "@minimal-agent/core"
 import { DefaultChatTransport, readUIMessageStream, type UIMessage, type UIMessageChunk } from "ai"
 
-import { FakeBackend } from "../backend/fake/fake-backend.ts"
 import type { HistoryMessage } from "../backend/history.ts"
+import { RuntimeBackend } from "../backend/runtime-backend.ts"
+import { createScriptedTransport } from "../backend/transport/scripted-transport.ts"
 import type { ChatDataTypes } from "../chat-stream/chunks.ts"
-import type { SessionEntry } from "../core-mirror/session-entry.ts"
 import { startServer } from "../server.ts"
 
 type ChatMessage = UIMessage<unknown, ChatDataTypes>
 
 const TOKEN = "api-test-token-0123456789abcdefghijklmn"
 const HEADERS = { authorization: `Bearer ${TOKEN}`, "content-type": "application/json" }
+const TRANSPORT = { kind: "scripted" as const, description: "scripted, for tests" }
 
 let root: string
-let backend: FakeBackend
+let backend: RuntimeBackend
 let server: ReturnType<typeof startServer>
 
 beforeAll(() => {
   root = mkdtempSync(join(tmpdir(), "ma-web-api-"))
-  backend = new FakeBackend({ stepDelayMs: 1 })
-  server = startServer({ appDir: root, backend, token: TOKEN, keepAliveMs: 50 })
+  backend = new RuntimeBackend({
+    sendFn: createScriptedTransport({ stepDelayMs: 1 }),
+    retryCeilingMs: 5,
+  })
+  server = startServer({
+    appDir: root,
+    backend,
+    transport: TRANSPORT,
+    token: TOKEN,
+    keepAliveMs: 50,
+  })
 })
 
 afterAll(() => {
@@ -74,6 +93,7 @@ function isChunk(value: unknown): value is UIMessageChunk<unknown, ChatDataTypes
 
 interface Detail {
   backend: string
+  transport: typeof TRANSPORT
   session: { id: string; title: string; status: string; runs: number }
   history: HistoryMessage[]
 }
@@ -138,7 +158,7 @@ function entriesOf(frames: string[]): SessionEntry[] {
     })
 }
 
-/** Send a message through the AI SDK client path, as `useChat` does. */
+/** Send a message through the AI SDK client path, as `useChat` does, and read it to the end. */
 async function chat(sessionId: string, text: string) {
   const transport = new DefaultChatTransport<ChatMessage>({
     api: new URL(`/api/sessions/${sessionId}/messages`, server.url).href,
@@ -163,7 +183,7 @@ async function chat(sessionId: string, text: string) {
   return { message, errors }
 }
 
-async function detail(sessionId: string) {
+async function detail(sessionId: string): Promise<Detail> {
   const response = await api(`/api/sessions/${sessionId}`)
   expect(response.status).toBe(200)
   const body: unknown = await response.json()
@@ -209,27 +229,23 @@ describe("sessions", () => {
     })
     const second = await newSession()
     const list = await json(await api("/api/sessions"))
-    expect(list.backend).toBe("fake")
+    expect(list.backend).toBe("core")
+    expect(list.transport).toEqual(TRANSPORT)
     const ids = Array.isArray(list.sessions)
       ? list.sessions.map((item: unknown) => (isRecord(item) ? item.id : undefined))
       : []
     expect(ids[0]).toBe(second)
     expect(ids).toContain(session.id)
-    expect(await detail(second)).toMatchObject({ backend: "fake", history: [] })
+    const found = await detail(second)
+    expect(found).toMatchObject({ backend: "core", transport: TRANSPORT })
+    expect(found.history).toEqual([])
   })
 
   test("answers 404 for an unknown session on every route", async () => {
     expect((await api("/api/sessions/nope")).status).toBe(404)
     expect((await api("/api/sessions/nope/events")).status).toBe(404)
     expect((await post("/api/sessions/nope/messages", { text: "hi" })).status).toBe(404)
-    expect(
-      (
-        await post("/api/sessions/nope/answers", {
-          askId: "a",
-          answer: { kind: "text", text: "x" },
-        })
-      ).status,
-    ).toBe(404)
+    expect((await post("/api/sessions/nope/answers", { askId: "a", answer: "x" })).status).toBe(404)
     expect((await post("/api/sessions/nope/abort", {})).status).toBe(404)
   })
 
@@ -240,13 +256,21 @@ describe("sessions", () => {
     expect((await post("/api/sessions", { model: 3 })).status).toBe(400)
     expect((await post(`/api/sessions/${id}/messages`, { text: "  " })).status).toBe(400)
     expect((await post(`/api/sessions/${id}/messages`, {})).status).toBe(400)
-    expect(
-      (await post(`/api/sessions/${id}/answers`, { askId: "a", answer: { kind: "x" } })).status,
-    ).toBe(400)
+    expect((await post(`/api/sessions/${id}/answers`, { askId: "a", answer: 3 })).status).toBe(400)
+    expect((await post(`/api/sessions/${id}/answers`, { answer: "x" })).status).toBe(400)
     const wrong = await api(`/api/sessions/${id}/messages`)
     expect(wrong.status).toBe(405)
     expect(wrong.headers.get("allow")).toBe("POST")
     expect((await api("/api/sessions", { method: "DELETE" })).status).toBe(405)
+  })
+
+  test("answer on an unknown ask is 409 (RuntimeBackend.answer wiring)", async () => {
+    const id = await newSession()
+    const response = await post(`/api/sessions/${id}/answers`, {
+      askId: "never-asked",
+      answer: "x",
+    })
+    expect(response.status).toBe(409)
   })
 })
 
@@ -258,24 +282,22 @@ describe("POST /api/sessions/:id/messages", () => {
     expect(message?.id).toBe("msg-0")
     const text = message?.parts.find((part) => part.type === "text")
     expect(text).toMatchObject({ state: "done" })
-    expect(text?.type === "text" && text.text).toContain("fake backend")
+    expect(text?.type === "text" && text.text).toContain("scripted")
     expect(text?.type === "text" && text.text).toContain('You wrote: "hello there"')
     const usage = message?.parts.find((part) => part.type === "data-usage")
     expect(usage).toMatchObject({ data: { kind: "turn", turn: 1 } })
   })
 
-  test("streams a tool turn with the tool's input, output, and duration", async () => {
+  test("a reasoning turn decodes to a reasoning part, then text", async () => {
     const id = await newSession()
-    const { message, errors } = await chat(id, "read the file with a tool")
+    const { message, errors } = await chat(id, "think about it")
     expect(errors).toEqual([])
-    const tool = message?.parts.find((part) => part.type === "dynamic-tool")
-    expect(tool).toMatchObject({
-      toolName: "Read",
-      state: "output-available",
-      input: "README.md",
-      output: { isError: false, summary: "3 lines", durationMs: 42 },
-    })
-    expect(message?.parts.filter((part) => part.type === "step-start")).toHaveLength(2)
+    expect(message?.parts).toMatchObject([
+      { type: "step-start" },
+      { type: "reasoning", state: "done" },
+      { type: "text", state: "done" },
+      { type: "data-usage", data: { turn: 1 } },
+    ])
   })
 
   test("the history of a finished turn decodes to the live message", async () => {
@@ -292,11 +314,66 @@ describe("POST /api/sessions/:id/messages", () => {
     expect(replayed).toEqual(live.message)
   })
 
+  test("a retry turn really retries: status frames show it, then the reply", async () => {
+    const id = await newSession()
+    const response = await post(`/api/sessions/${id}/messages`, { text: "please retry" })
+    const { frames } = await readFrames(response, (seen) =>
+      seen.some((frame) => frame.includes('"type":"finish"')),
+    )
+    const parts = dataOf(frames)
+    const statuses = parts.filter(
+      (part): part is { type: string; data: { phase: string } } =>
+        isRecord(part) && part.type === "data-status",
+    )
+    expect(statuses.map((part) => part.data.phase)).toContain("retrying")
+    expect(parts.some((part) => isRecord(part) && part.type === "data-ask-user")).toBe(false)
+    const text = parts
+      .filter(
+        (part): part is { type: string; delta: string } =>
+          isRecord(part) && part.type === "text-delta",
+      )
+      .map((part) => part.delta)
+      .join("")
+    expect(text).toContain("scripted retries")
+  })
+
+  test("a quota turn waits for the reset, then replies", async () => {
+    const id = await newSession()
+    const response = await post(`/api/sessions/${id}/messages`, { text: "mind the quota please" })
+    const { frames } = await readFrames(response, (seen) =>
+      seen.some((frame) => frame.includes('"type":"finish"')),
+    )
+    const parts = dataOf(frames)
+    const statuses = parts.filter(
+      (part): part is { type: string; data: { phase: string } } =>
+        isRecord(part) && part.type === "data-status",
+    )
+    expect(statuses.map((part) => part.data.phase)).toContain("waiting_for_quota")
+    const text = parts
+      .filter(
+        (part): part is { type: string; delta: string } =>
+          isRecord(part) && part.type === "text-delta",
+      )
+      .map((part) => part.delta)
+      .join("")
+    expect(text).toContain("quota wait")
+  })
+
+  test("a permanent failure pauses the run: error, then finish", async () => {
+    const id = await newSession()
+    const { message, errors } = await chat(id, "this will fail")
+    expect(errors).toEqual(["scripted permanent failure"])
+    expect(message?.parts.some((part) => part.type === "text")).toBe(false)
+    const { session } = await detail(id)
+    expect(session.status).toBe("idle")
+  })
+
   test("refuses a second turn while one runs (409), and abort ends the first", async () => {
     const id = await newSession()
-    const first = await post(`/api/sessions/${id}/messages`, { text: "a long run" })
+    const first = await post(`/api/sessions/${id}/messages`, { text: "a long run please" })
     expect(first.status).toBe(200)
     const reading = readFrames(first)
+    await waitFor(async () => (await detail(id)).session.status === "running")
     expect((await post(`/api/sessions/${id}/messages`, { text: "again" })).status).toBe(409)
     const abort = await post(`/api/sessions/${id}/abort`, { reason: "test" })
     expect(await abort.json()).toEqual({ aborted: true })
@@ -310,126 +387,13 @@ describe("POST /api/sessions/:id/messages", () => {
 
   test("a client that goes away does not stop the run", async () => {
     const id = await newSession()
-    const response = await post(`/api/sessions/${id}/messages`, { text: "tool please" })
-    const { reader } = await readFrames(response, (frames) => frames.length >= 3)
+    const response = await post(`/api/sessions/${id}/messages`, { text: "a long run please" })
+    const { reader } = await readFrames(response, (frames) => frames.length >= 2)
     await reader.cancel()
     await waitFor(async () => (await detail(id)).session.status === "idle")
     const { history } = await detail(id)
     const last = history.at(-1)
-    expect(last?.role === "assistant" && last.chunks.at(-1)).toEqual({
-      type: "finish",
-      finishReason: "stop",
-    })
-  })
-})
-
-describe("POST /api/sessions/:id/answers", () => {
-  async function untilAsk(id: string, text: string) {
-    const response = await post(`/api/sessions/${id}/messages`, { text })
-    return readFrames(response, (frames) =>
-      frames.some(
-        (frame) => frame.includes("tool-approval-request") || frame.includes("data-ask-user"),
-      ),
-    )
-  }
-
-  async function rest(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string[]> {
-    const { frames } = await readFrames(
-      new Response(
-        new ReadableStream({
-          pull: async (c) => {
-            const { value, done } = await reader.read()
-            if (done) c.close()
-            else c.enqueue(value)
-          },
-        }),
-      ),
-    )
-    return frames
-  }
-
-  test("approves a tool: the run waits, then runs the tool and finishes", async () => {
-    const id = await newSession()
-    const { frames, reader } = await untilAsk(id, "please approve the delete")
-    const request = dataOf(frames).find(
-      (chunk): chunk is { type: string; approvalId: string } =>
-        typeof chunk === "object" && chunk !== null && "approvalId" in chunk,
-    )
-    expect(request).toMatchObject({ type: "tool-approval-request", toolCallId: "call_1" })
-    expect((await detail(id)).session.status).toBe("waiting")
-    expect(
-      (
-        await post(`/api/sessions/${id}/answers`, {
-          askId: "ask_9",
-          answer: { kind: "approval", approved: true },
-        })
-      ).status,
-    ).toBe(409)
-    expect(
-      (
-        await post(`/api/sessions/${id}/answers`, {
-          askId: request?.approvalId,
-          answer: { kind: "text", text: "yes" },
-        })
-      ).status,
-    ).toBe(400)
-    const answered = await post(`/api/sessions/${id}/answers`, {
-      askId: request?.approvalId,
-      answer: { kind: "approval", approved: true },
-    })
-    expect(await answered.json()).toEqual({ ok: true })
-    const after = dataOf(await rest(reader))
-    expect(after[0]).toEqual({
-      type: "tool-approval-response",
-      approvalId: "ask_1",
-      approved: true,
-    })
-    expect(after).toContainEqual(
-      expect.objectContaining({
-        type: "tool-output-available",
-        toolCallId: "call_1",
-        output: expect.objectContaining({ summary: "2 files removed" }),
-      }),
-    )
-    expect(after.at(-1)).toEqual({ type: "finish", finishReason: "stop" })
-  })
-
-  test("denies a tool: the call ends denied", async () => {
-    const id = await newSession()
-    const { reader } = await untilAsk(id, "delete it, I will approve")
-    await post(`/api/sessions/${id}/answers`, {
-      askId: "ask_1",
-      answer: { kind: "approval", approved: false, reason: "no" },
-    })
-    const after = dataOf(await rest(reader))
-    expect(after).toContainEqual({ type: "tool-output-denied", toolCallId: "call_1" })
-  })
-
-  test("answers a free-form question", async () => {
-    const id = await newSession()
-    const { reader } = await untilAsk(id, "ask me a question")
-    await post(`/api/sessions/${id}/answers`, {
-      askId: "ask_1",
-      answer: { kind: "text", text: "dev" },
-    })
-    const after = dataOf(await rest(reader))
-    expect(after[0]).toMatchObject({
-      type: "data-ask-user",
-      data: { status: "answered", answer: "dev" },
-    })
-    const text = after
-      .map((chunk) => (isRecord(chunk) && chunk.type === "text-delta" ? chunk.delta : ""))
-      .join("")
-    expect(text).toContain('Using the branch "dev"')
-  })
-
-  test("abort while waiting for an answer ends the run", async () => {
-    const id = await newSession()
-    const { reader } = await untilAsk(id, "approve this")
-    await post(`/api/sessions/${id}/abort`, {})
-    const after = dataOf(await rest(reader))
-    expect(after).toContainEqual({ type: "error", errorText: "aborted" })
-    expect((await detail(id)).session.status).toBe("idle")
+    expect(last?.role === "assistant" && last.chunks.at(-1)).toMatchObject({ type: "finish" })
   })
 })
 
@@ -453,24 +417,24 @@ describe("GET /api/sessions/:id/events", () => {
 
   test("replays the whole log with id: seq, in order", async () => {
     const id = await newSession()
-    await chat(id, "use a tool")
+    await chat(id, "hello there")
     const full = await events(id, finished)
     expect(full[0]).toMatchObject({ v: 1, seq: 0, ch: "event", data: { type: "user_message" } })
     full.forEach((entry, index) => {
       expect(entry.seq).toBe(index)
       expect(entry.sessionId).toBe(id)
     })
-    expect(full.some((entry) => entry.ch === "diag")).toBe(true)
     expect(full.at(-1)?.data).toEqual({ type: "run_finished", outcome: "completed" })
   })
 
   test("resumes after Last-Event-ID", async () => {
     const id = await newSession()
-    await chat(id, "use a tool")
+    await chat(id, "hello there")
     const full = await events(id, finished)
-    const resumed = await events(id, finished, { "last-event-id": "9" })
-    expect(resumed[0]?.seq).toBe(10)
-    expect(resumed).toEqual(full.slice(10))
+    expect(full.length).toBeGreaterThan(3)
+    const resumed = await events(id, finished, { "last-event-id": "1" })
+    expect(resumed[0]?.seq).toBe(2)
+    expect(resumed).toEqual(full.slice(2))
     const badHeader = await events(id, (entries) => entries.length > 0, { "last-event-id": "abc" })
     expect(badHeader[0]?.seq).toBe(0)
   })

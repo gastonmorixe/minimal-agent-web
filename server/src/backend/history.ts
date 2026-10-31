@@ -16,6 +16,8 @@
  * @module backend/history
  */
 
+import type { SessionEntry } from "@minimal-agent/core"
+
 import {
   type ChatStreamInput,
   type ChatStreamState,
@@ -23,7 +25,6 @@ import {
   mapChatStreamInput,
 } from "../chat-stream/adapter.ts"
 import type { UiMessageChunk } from "../chat-stream/chunks.ts"
-import type { SessionEntry } from "../core-mirror/session-entry.ts"
 
 /** One message of the history. */
 export type HistoryMessage =

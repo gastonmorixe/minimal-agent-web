@@ -1,0 +1,20 @@
+data: {"type":"start","messageId":"msg-ask"}
+
+data: {"type":"start-step"}
+
+data: {"type":"data-ask-user","id":"ask_1","data":{"askId":"ask_1","code":"signed_thinking_mismatch","title":"Thinking signed by another model","detail":"The last turn's reasoning was signed by a different model.\nKeep it or drop it?","options":[{"id":"keep","label":"Keep it","isDefault":true},{"id":"drop","label":"Drop it","destructive":true}]}}
+
+data: {"type":"text-start","id":"1:0"}
+
+data: {"type":"text-delta","id":"1:0","delta":"Kept the reasoning."}
+
+data: {"type":"text-end","id":"1:0"}
+
+data: {"type":"data-usage","data":{"kind":"turn","turn":1,"usage":{"inputTokens":18,"outputTokens":3}}}
+
+data: {"type":"finish-step"}
+
+data: {"type":"finish","finishReason":"stop"}
+
+data: [DONE]
+

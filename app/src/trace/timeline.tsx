@@ -63,9 +63,7 @@ export function waitText(wait: TraceWait): string {
     case "host":
       return "Paused, waiting for the host"
     case "ask":
-      return wait.answer === undefined
-        ? `Asked: ${wait.question ?? ""} (waiting)`
-        : `Asked: ${wait.question ?? ""} Answer: ${wait.answer}`
+      return `Asked: ${wait.title ?? ""}`
     default:
       return wait.kind
   }
@@ -94,20 +92,8 @@ function WaitLine({ wait }: { wait: TraceWait }) {
 function ToolTraceLine({ tool }: { tool: TraceTool }) {
   const title = [tool.toolName, tool.input].filter(Boolean).join(" ")
   const status = tool.state === "running" ? "running" : tool.state === "error" ? "error" : undefined
-  const verb =
-    tool.state === "running"
-      ? "Running"
-      : tool.state === "error"
-        ? "Failed"
-        : tool.state === "denied"
-          ? "Denied"
-          : "Ran"
-  const facts = [
-    tool.durationMs === undefined ? null : formatMs(tool.durationMs),
-    tool.approval === undefined || tool.approval === "requested" ? null : tool.approval,
-  ]
-    .filter(Boolean)
-    .join(" · ")
+  const verb = tool.state === "running" ? "Running" : tool.state === "error" ? "Failed" : "Ran"
+  const facts = tool.durationMs === undefined ? "" : formatMs(tool.durationMs)
   return (
     <TraceCollapsible>
       <TraceCollapsibleTrigger>

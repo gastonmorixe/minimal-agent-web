@@ -118,12 +118,12 @@ describe("mapChatStreamInput", () => {
           stopReason: "tool_use",
           usage: { inputTokens: 1, outputTokens: 1 },
         },
-        { type: "notice", notice: { kind: "tool_rounds_capped", severity: "warn", cap: 3 } },
+        { type: "notice", notice: { kind: "max_tokens_capped", severity: "warn", cap: 3 } },
         { type: "text_delta", id: "3:text", text: "Wrapping up." },
       ),
     )
     expect(chunks.slice(-4)).toEqual([
-      { type: "data-notice", data: { kind: "tool_rounds_capped", severity: "warn", cap: 3 } },
+      { type: "data-notice", data: { kind: "max_tokens_capped", severity: "warn", cap: 3 } },
       { type: "start-step" },
       { type: "text-start", id: "3:text" },
       { type: "text-delta", id: "3:text", delta: "Wrapping up." },

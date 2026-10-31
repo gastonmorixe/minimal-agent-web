@@ -4,9 +4,10 @@
  * Built on the Chat pattern of the shadcn/ui registry
  * (`/docs/ai-elements/radix/chat`): Message Scroller, Message, Bubble, and a
  * Prompt Input. The server owns the conversation, so the request body is just
- * the new text. Asks are answered with `POST /answers` (and mirrored into the
- * local message with `addToolApprovalResponse`), and Stop aborts the run on
- * the server with `POST /abort`.
+ * the new text. An ask (core's preflight `ask_user`, spec v1 S17 — a plain
+ * multiple-choice question, not a tool approval: core has no tool-approval
+ * concept) is answered with `POST /answers`; Stop aborts the run on the
+ * server with `POST /abort`.
  *
  * A run this tab did not stream (another tab's, or one that was running
  * when this page loaded) shows in the event log only. When the log has more
@@ -21,7 +22,7 @@ import { DefaultChatTransport } from "ai"
 import { ArrowUpIcon, MessageCircleDashedIcon, SquareIcon } from "lucide-react"
 import * as React from "react"
 import { abortTurn, answerAsk, authHeaders, getSession, reportUnauthorized } from "@/api/client.ts"
-import type { AskAnswer, BackendKind, ChatMessage, StatusData } from "@/api/types.ts"
+import type { ChatMessage, StatusData } from "@/api/types.ts"
 import { Bubble, BubbleContent } from "@/components/ui/bubble"
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty"
 import {
@@ -44,21 +45,18 @@ import { type DecodedMessage, decodeHistory } from "./history.ts"
 import { AssistantParts } from "./message-parts.tsx"
 import { statusText } from "./status-text.ts"
 
-/** The fake backend's scenarios, by the word that picks each (server `fake/scenarios.ts`). */
-const FAKE_HINTS = [
-  ["tool", "reads a file with a tool"],
-  ["approve", "asks to approve a command"],
-  ["question", "asks you a question"],
+/** The scripted transport's scenarios, by the word that picks each (server `transport/scripted-transport.ts`). */
+const SCRIPT_HINTS = [
   ["think", "shows reasoning"],
-  ["retry", "retries and waits for quota"],
-  ["error", "fails with a provider error"],
-  ["long", "a long run, to try Stop"],
+  ["retry", "retries, with status"],
+  ["quota", "waits for a quota reset"],
+  ["fail", "pauses on a permanent error"],
+  ["long", "a long reply, to try Stop"],
 ] as const
 
 /** Props of {@link ChatView}. */
 export interface ChatViewProps {
   sessionId: string
-  backend: BackendKind
   initial: DecodedMessage[]
   /** A run is active on the server (from the event log). */
   runActive: boolean
@@ -119,7 +117,7 @@ export function ChatView(props: ChatViewProps) {
       if (/unauthorized/iu.test(error.message)) reportUnauthorized()
     },
   })
-  const { messages, sendMessage, setMessages, stop, addToolApprovalResponse, error } = chat
+  const { messages, sendMessage, setMessages, stop, error } = chat
   const busy = chat.status === "submitted" || chat.status === "streaming"
   const working = busy || runActive
 
@@ -172,11 +170,7 @@ export function ChatView(props: ChatViewProps) {
   }
 
   const handlers = {
-    onApproval: (approvalId: string, approved: boolean) => {
-      void addToolApprovalResponse({ id: approvalId, approved })
-      void answerAsk(sessionId, approvalId, { kind: "approval", approved })
-    },
-    onAnswer: (askId: string, answer: AskAnswer) => {
+    onAnswer: (askId: string, answer: string | null) => {
       void answerAsk(sessionId, askId, answer)
     },
   }
@@ -186,7 +180,7 @@ export function ChatView(props: ChatViewProps) {
       <div className="flex min-h-0 flex-1 flex-col gap-4">
         <div className="min-h-0 flex-1">
           {messages.length === 0 ? (
-            <EmptyChat backend={props.backend} />
+            <EmptyChat />
           ) : (
             <MessageScroller>
               <MessageScrollerViewport>
@@ -300,7 +294,7 @@ export function ChatView(props: ChatViewProps) {
   )
 }
 
-function EmptyChat({ backend }: { backend: BackendKind }) {
+function EmptyChat() {
   return (
     <Empty className="h-full">
       <EmptyHeader>
@@ -309,20 +303,16 @@ function EmptyChat({ backend }: { backend: BackendKind }) {
         </EmptyMedia>
         <EmptyTitle>Start the conversation</EmptyTitle>
         <EmptyDescription>
-          {backend === "fake"
-            ? "The fake backend replays canned runs. A word in your message picks one:"
-            : "Ask the agent to read or change your code."}
+          Every reply is scripted (see the banner above). A word in your message picks the script:
         </EmptyDescription>
       </EmptyHeader>
-      {backend === "fake" && (
-        <ul className="grid gap-1 text-left text-sm text-muted-foreground">
-          {FAKE_HINTS.map(([word, what]) => (
-            <li key={word}>
-              <span className="font-mono text-foreground">{word}</span>: {what}
-            </li>
-          ))}
-        </ul>
-      )}
+      <ul className="grid gap-1 text-left text-sm text-muted-foreground">
+        {SCRIPT_HINTS.map(([word, what]) => (
+          <li key={word}>
+            <span className="font-mono text-foreground">{word}</span>: {what}
+          </li>
+        ))}
+      </ul>
     </Empty>
   )
 }

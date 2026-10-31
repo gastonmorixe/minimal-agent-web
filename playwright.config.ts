@@ -1,7 +1,7 @@
 /**
- * Playwright e2e suite (S58): the built app and the server with the fake
- * backend, on Chromium. `bun run test:e2e` runs it; `bun run check` runs it
- * after the build.
+ * Playwright e2e suite (S58, updated for S53): the built app and the real
+ * server (`RuntimeBackend`, the scripted transport) on Chromium.
+ * `bun run test:e2e` runs it; `bun run check` runs it after the build.
  *
  * The suite uses the `@playwright/test` version whose Chromium build is
  * installed (`PLAYWRIGHT_BROWSERS_PATH`). CI installs that build first.
@@ -35,7 +35,8 @@ export default defineConfig({
     env: {
       PORT: String(port),
       MA_WEB_TOKEN: process.env.MA_WEB_TOKEN,
-      MA_WEB_FAKE_STEP_MS: "20",
+      MA_WEB_SCRIPT_STEP_MS: "20",
+      MA_WEB_RETRY_CEILING_MS: "20",
     },
   },
 })

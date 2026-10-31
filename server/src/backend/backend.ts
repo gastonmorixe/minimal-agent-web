@@ -1,17 +1,13 @@
 /**
  * The session backend: what the HTTP routes of spec 4.2 need from an agent.
  *
- * The routes in `api/routes.ts` talk only to this interface. Two
- * implementations are planned:
- *
- * - `FakeBackend` (`fake/fake-backend.ts`), today's default. In memory and
- *   deterministic: it replays canned core event sequences. It never calls a
- *   model. For development and tests only.
- * - A core-backed backend (S53) on `createRuntime` / `openSession` (S47). It
- *   replaces the fake as the default. Each method maps to one core call:
- *   `createSession` to `runtime.openSession`, `startTurn` to `session.run`,
- *   `subscribe` to `session.subscribe`, `answer` to `session.answer`, `abort`
- *   to `session.abort`.
+ * `RuntimeBackend` (`runtime-backend.ts`) is the one implementation, on
+ * `createRuntime` / `openSession` (core S47, S53). Each method maps to one
+ * core call: `createSession` to `runtime.openSession`, `startTurn` to
+ * `session.run`, `subscribe` to `session.subscribe`, `answer` to
+ * `session.answer`, `abort` to `session.abort`. See its module doc for the
+ * two scope decisions it documents (no tools, a server-supplied transport
+ * instead of a real model provider).
  *
  * Methods throw {@link BackendError} (async methods reject with it) for an
  * unknown session, a busy session, or an unknown ask. The routes turn its
@@ -20,11 +16,11 @@
  * @module backend/backend
  */
 
-import type { AskAnswer, WebAgentEvent } from "../core-mirror/events.ts"
-import type { SessionEntryListener, Unsubscribe } from "../core-mirror/session-entry.ts"
+import type { SessionEntryListener, SubscribeOptions, Unsubscribe } from "@minimal-agent/core"
+import type { AgentEvent } from "@minimal-agent/core/sdk/events"
 
-/** Which implementation answers the API. The app shows it, so a fake is never taken for an agent. */
-export type BackendKind = "fake" | "core"
+/** Which implementation answers the API. Always `"core"`; the app no longer shows a fake-backend banner. */
+export type BackendKind = "core"
 
 /** What `POST /api/sessions` accepts. Every field is optional. */
 export interface CreateSessionInput {
@@ -44,7 +40,7 @@ export interface SessionSummary {
   model: string
   cwd: string
   mode: string
-  /** The model's context window in tokens, for the Context element. */
+  /** A placeholder context window in tokens, for the Context element: no model registry is wired (see `runtime-backend.ts`). */
   contextWindow: number
   /** Epoch ms. */
   createdAt: number
@@ -64,13 +60,7 @@ export interface TurnHandle {
    * goes on when a consumer stops reading: only {@link SessionBackend.abort}
    * stops it.
    */
-  events: AsyncIterable<WebAgentEvent>
-}
-
-/** Options for {@link SessionBackend.subscribe}, as core's `session.subscribe` takes them. */
-export interface SubscribeOptions {
-  /** Replay from this seq, then stream live entries. Absent: live entries only. */
-  fromSeq?: number
+  events: AsyncIterable<AgentEvent>
 }
 
 /** The session backend. See the module doc. */
@@ -90,8 +80,12 @@ export interface SessionBackend {
    * immediate unsubscribe read the whole log.
    */
   subscribe(id: string, listener: SessionEntryListener, options?: SubscribeOptions): Unsubscribe
-  /** Answer a pending `ask_user`. Throws `no_such_ask` when it is not pending. */
-  answer(id: string, askId: string, answer: AskAnswer): void
+  /**
+   * Answer a pending `ask_user` with the id of the chosen
+   * {@link AskUserEvent.options} entry, or `null` to decline. Throws
+   * `no_such_ask` when it is not pending.
+   */
+  answer(id: string, askId: string, answer: string | null): void
   /** Abort the current turn. Returns false when no turn runs. */
   abort(id: string, reason?: string): boolean
   /** Stop every run and timer. */
@@ -99,10 +93,10 @@ export interface SessionBackend {
 }
 
 /**
- * Why a backend call failed: no such session, a turn already runs, no such
- * pending ask, or an answer of the wrong kind.
+ * Why a backend call failed: no such session, a turn already runs, or no
+ * such pending ask.
  */
-export type BackendErrorCode = "not_found" | "busy" | "no_such_ask" | "invalid"
+export type BackendErrorCode = "not_found" | "busy" | "no_such_ask"
 
 /** A backend call failed for a reason the caller can act on. */
 export class BackendError extends Error {

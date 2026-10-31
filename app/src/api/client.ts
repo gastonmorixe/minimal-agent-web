@@ -9,11 +9,11 @@
 
 import { clearToken, getToken } from "./token.ts"
 import type {
-  AskAnswer,
   HistoryMessage,
   SessionDetail,
   SessionList,
   SessionSummary,
+  TransportInfo,
 } from "./types.ts"
 
 /** The server refused the token. */
@@ -91,6 +91,16 @@ function isHistoryMessage(value: unknown): value is HistoryMessage {
   return value.role === "assistant" && Array.isArray(value.chunks)
 }
 
+const FALLBACK_TRANSPORT: TransportInfo = { kind: "scripted", description: "unknown transport" }
+
+function isTransport(value: unknown): value is TransportInfo {
+  return isRecord(value) && value.kind === "scripted" && typeof value.description === "string"
+}
+
+function transportOf(body: Record<string, unknown>): TransportInfo {
+  return isTransport(body.transport) ? body.transport : FALLBACK_TRANSPORT
+}
+
 async function readJson(response: Response): Promise<Record<string, unknown>> {
   const body: unknown = await response.json().catch(() => null)
   if (!response.ok) {
@@ -116,7 +126,7 @@ async function send(path: string, body: unknown): Promise<Record<string, unknown
 export async function listSessions(): Promise<SessionList> {
   const body = await readJson(await apiFetch("/api/sessions"))
   const sessions = Array.isArray(body.sessions) ? body.sessions.filter(isSummary) : []
-  return { backend: body.backend === "core" ? "core" : "fake", sessions }
+  return { backend: "core", transport: transportOf(body), sessions }
 }
 
 /** `POST /api/sessions`. */
@@ -133,11 +143,14 @@ export async function getSession(id: string): Promise<SessionDetail | null> {
   const body = await readJson(response)
   if (!isSummary(body.session)) throw new ApiError(500, "the server sent no session")
   const history = Array.isArray(body.history) ? body.history.filter(isHistoryMessage) : []
-  return { backend: body.backend === "core" ? "core" : "fake", session: body.session, history }
+  return { backend: "core", transport: transportOf(body), session: body.session, history }
 }
 
-/** `POST /api/sessions/:id/answers`. */
-export async function answerAsk(id: string, askId: string, answer: AskAnswer): Promise<void> {
+/**
+ * `POST /api/sessions/:id/answers`. `answer` is the id of the chosen
+ * {@link AskUserData.options} entry, or `null` to decline.
+ */
+export async function answerAsk(id: string, askId: string, answer: string | null): Promise<void> {
   await send(`/api/sessions/${encodeURIComponent(id)}/answers`, { askId, answer })
 }
 

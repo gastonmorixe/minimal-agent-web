@@ -1,0 +1,22 @@
+data: {"type":"start","messageId":"msg-quota"}
+
+data: {"type":"start-step"}
+
+data: {"type":"data-usage","id":"quota:scripted","data":{"kind":"quota","provider":"scripted","used":100,"limit":100,"resetAt":1700000060000}}
+
+data: {"type":"data-status","data":{"phase":"waiting_for_quota","resetAt":1700000060000,"cause":"recoverable"},"transient":true}
+
+data: {"type":"text-start","id":"1:0"}
+
+data: {"type":"text-delta","id":"1:0","delta":"Done after the quota wait."}
+
+data: {"type":"text-end","id":"1:0"}
+
+data: {"type":"data-usage","data":{"kind":"turn","turn":1,"usage":{"inputTokens":15,"outputTokens":5}}}
+
+data: {"type":"finish-step"}
+
+data: {"type":"finish","finishReason":"stop"}
+
+data: [DONE]
+

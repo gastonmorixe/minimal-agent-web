@@ -10,7 +10,11 @@ data: {"type":"text-end","id":"1:text"}
 
 data: {"type":"tool-input-available","toolCallId":"toolu_01","toolName":"Read","input":null,"dynamic":true}
 
-data: {"type":"tool-output-available","toolCallId":"toolu_01","output":{"isError":false},"dynamic":true}
+data: {"type":"tool-input-available","toolCallId":"toolu_01","toolName":"Read","input":{"path":"README.md"},"dynamic":true}
+
+data: {"type":"tool-output-available","toolCallId":"toolu_01","output":{"text":"# demo\n","truncated":false,"totalBytes":7},"dynamic":true,"preliminary":true}
+
+data: {"type":"tool-output-available","toolCallId":"toolu_01","output":{"isError":false,"summary":"3 lines","durationMs":12,"text":"# demo\n"},"dynamic":true}
 
 data: {"type":"data-usage","data":{"kind":"turn","turn":1,"usage":{"inputTokens":30,"outputTokens":9}}}
 

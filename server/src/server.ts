@@ -11,7 +11,7 @@
 
 import { resolve, sep } from "node:path"
 
-import { handleApi } from "./api/routes.ts"
+import { handleApi, type TransportInfo } from "./api/routes.ts"
 import type { SessionBackend } from "./backend/backend.ts"
 import { checkBindHost, checkToken, isAuthorized, unauthorized } from "./security/security.ts"
 
@@ -21,6 +21,8 @@ export interface ServerOptions {
   appDir: string
   /** What answers the session API. */
   backend: SessionBackend
+  /** What `GET /api/sessions` says about the model transport (see `backend/runtime-backend.ts`). */
+  transport: TransportInfo
   /** The bearer token every `/api` request must carry. */
   token: string
   /** Defaults to `127.0.0.1` (spec 4.5). */
@@ -57,7 +59,7 @@ export function startServer(options: ServerOptions): ReturnType<typeof Bun.serve
   checkBindHost(hostname, options.allowRemoteBind ?? false)
   checkToken(options.token)
   const appDir = resolve(options.appDir)
-  const { backend, token } = options
+  const { backend, transport, token } = options
   const keepAliveMs = options.keepAliveMs ?? DEFAULT_KEEP_ALIVE_MS
   return Bun.serve({
     hostname,
@@ -68,7 +70,7 @@ export function startServer(options: ServerOptions): ReturnType<typeof Bun.serve
         if (!isAuthorized(request, token)) return withSecurityHeaders(unauthorized())
         // Streams stay open while a run waits; keep-alives replace the idle timeout.
         server.timeout(request, 0)
-        return withSecurityHeaders(await handleApi(request, { backend, keepAliveMs }))
+        return withSecurityHeaders(await handleApi(request, { backend, transport, keepAliveMs }))
       }
       if (request.method !== "GET" && request.method !== "HEAD") {
         return withSecurityHeaders(new Response("method not allowed", { status: 405 }))

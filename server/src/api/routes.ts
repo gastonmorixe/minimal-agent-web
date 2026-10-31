@@ -11,6 +11,12 @@
  * | `POST /api/sessions/:id/answers`  | `{ ok: true }`, body `{ askId, answer }`               |
  * | `POST /api/sessions/:id/abort`    | `{ aborted }`, body `{ reason? }` (optional)           |
  *
+ * `GET /api/sessions` and `GET /api/sessions/:id` also carry `transport`
+ * (`{kind: "scripted", description}`): every session's model replies are
+ * scripted, not a real provider (`backend/runtime-backend.ts`'s module doc
+ * explains why). The app shows this plainly instead of implying a real
+ * model answers.
+ *
  * Errors are JSON `{ error }`: 400 bad body, 404 no session, 405 wrong
  * method, 409 busy session or no such pending ask. The caller (`server.ts`)
  * checks the bearer token before any route runs.
@@ -18,16 +24,23 @@
  * @module api/routes
  */
 
+import type { SessionEntry } from "@minimal-agent/core"
+
 import { BackendError, type CreateSessionInput, type SessionBackend } from "../backend/backend.ts"
 import { historyFromEntries } from "../backend/history.ts"
-import type { AskAnswer } from "../core-mirror/events.ts"
-import type { SessionEntry } from "../core-mirror/session-entry.ts"
 
 import { chatStreamResponse, eventLogResponse, type StreamOptions } from "./streams.ts"
+
+/** What `GET /api/sessions` and `GET /api/sessions/:id` say about the model transport. */
+export interface TransportInfo {
+  kind: "scripted"
+  description: string
+}
 
 /** What the routes need besides the request. */
 export interface ApiContext extends StreamOptions {
   backend: SessionBackend
+  transport: TransportInfo
 }
 
 /** Largest request body the API reads. */
@@ -101,21 +114,18 @@ function parseMessage(body: Record<string, unknown>): string {
   return text
 }
 
-function parseAnswer(body: Record<string, unknown>): { askId: string; answer: AskAnswer } {
+/**
+ * Parse `POST /answers`'s body: the id of the chosen {@link AskUserEvent.options}
+ * entry, or `null` to decline (same as `Session.answer`'s own `answer` parameter).
+ */
+function parseAnswer(body: Record<string, unknown>): { askId: string; answer: string | null } {
   const { askId, answer } = body
   if (typeof askId !== "string" || askId.length === 0) throw new BadRequest("askId is required")
-  if (!isRecord(answer)) throw new BadRequest("answer must be an object")
-  if (answer.kind === "approval" && typeof answer.approved === "boolean") {
-    const reason = optionalString(answer, "reason")
-    return {
-      askId,
-      answer: { kind: "approval", approved: answer.approved, ...(reason ? { reason } : {}) },
-    }
+  if (answer === null) return { askId, answer: null }
+  if (typeof answer !== "string" || answer.length === 0) {
+    throw new BadRequest("answer must be a non-empty string (an option id) or null")
   }
-  if (answer.kind === "text" && typeof answer.text === "string") {
-    return { askId, answer: { kind: "text", text: answer.text } }
-  }
-  throw new BadRequest('answer must be {kind: "approval", approved} or {kind: "text", text}')
+  return { askId, answer }
 }
 
 /** The whole log of a session: a replay from seq 0, read synchronously. */
@@ -133,7 +143,7 @@ export async function handleApi(request: Request, context: ApiContext): Promise<
   } catch (error) {
     if (error instanceof BadRequest) return failure(400, error.message)
     if (error instanceof BackendError) {
-      const status = { not_found: 404, busy: 409, no_such_ask: 409, invalid: 400 }[error.code]
+      const status = { not_found: 404, busy: 409, no_such_ask: 409 }[error.code]
       return failure(status, error.message)
     }
     throw error
@@ -141,13 +151,14 @@ export async function handleApi(request: Request, context: ApiContext): Promise<
 }
 
 async function route(request: Request, context: ApiContext): Promise<Response> {
-  const { backend } = context
+  const { backend, transport } = context
   const { pathname } = new URL(request.url)
   const { method } = request
 
   if (SESSIONS.test(pathname)) {
-    if (method === "GET")
-      return json({ backend: backend.kind, sessions: await backend.listSessions() })
+    if (method === "GET") {
+      return json({ backend: backend.kind, transport, sessions: await backend.listSessions() })
+    }
     if (method === "POST") {
       const session = await backend.createSession(parseCreate(await readBody(request)))
       return json({ session }, 201)
@@ -172,7 +183,7 @@ async function route(request: Request, context: ApiContext): Promise<Response> {
       const session = await backend.getSession(id)
       if (session === undefined) return failure(404, `no session ${id}`)
       const history = historyFromEntries(readWholeLog(backend, id))
-      return json({ backend: backend.kind, session, history })
+      return json({ backend: backend.kind, transport, session, history })
     }
     case "messages": {
       if (method !== "POST") return methodNotAllowed("POST")

@@ -12,8 +12,18 @@
 
 import type { UIMessage, UIMessageChunk } from "ai"
 
-/** Which backend answers. `fake` replays canned runs and calls no model. */
-export type BackendKind = "fake" | "core"
+/** Which backend answers. Always `"core"`: the server runs a real `createRuntime`. */
+export type BackendKind = "core"
+
+/**
+ * What `GET /api/sessions` says about the model transport: every session's
+ * replies are scripted, not a real provider (see the web repo's AGENTS.md,
+ * "Session backend", and `server/src/backend/runtime-backend.ts`).
+ */
+export interface TransportInfo {
+  kind: "scripted"
+  description: string
+}
 
 /** What a session is doing now. */
 export type SessionStatus = "idle" | "running" | "waiting"
@@ -35,6 +45,7 @@ export interface SessionSummary {
 /** `GET /api/sessions`. */
 export interface SessionList {
   backend: BackendKind
+  transport: TransportInfo
   sessions: SessionSummary[]
 }
 
@@ -51,7 +62,12 @@ export type UsageData =
   | { kind: "turn"; turn: number; usage: TurnUsage }
   | { kind: "quota"; provider: string; used?: number; limit?: number; resetAt?: number }
 
-/** Payload of a transient `data-status` part. */
+/**
+ * Payload of a transient `data-status` part: core's known phases
+ * (`sending`, `receiving`, `running_tool`, `retrying`, `waiting_for_quota`,
+ * `waiting_for_host`), loosened to `string` so an added phase still decodes
+ * (`chat/status-text.ts` falls back to showing the code itself).
+ */
 export interface StatusData {
   phase: string
   toolName?: string
@@ -61,13 +77,27 @@ export interface StatusData {
   resetAt?: number
 }
 
-/** Payload of a `data-ask-user` part. */
+/** One answer the person can pick for an ask (core's `AskUserOption`). */
+export interface AskUserOption {
+  id: string
+  label: string
+  description?: string
+  isDefault?: boolean
+  destructive?: boolean
+}
+
+/**
+ * Payload of a `data-ask-user` part: core's preflight ask (spec v1 S17), a
+ * multiple-choice question unrelated to any specific tool call (core has no
+ * tool-approval concept). There is no corresponding "answered" event, so the
+ * app marks one answered itself, right when it posts the answer.
+ */
 export interface AskUserData {
   askId: string
-  question: string
-  options?: string[]
-  status: "pending" | "answered"
-  answer?: string
+  code: string
+  title: string
+  detail: string
+  options: AskUserOption[]
 }
 
 /** Payload of a `data-notice` part: core's notice. */
@@ -105,14 +135,10 @@ export type HistoryMessage =
 /** `GET /api/sessions/:id`. */
 export interface SessionDetail {
   backend: BackendKind
+  transport: TransportInfo
   session: SessionSummary
   history: HistoryMessage[]
 }
-
-/** An answer to an ask. */
-export type AskAnswer =
-  | { kind: "approval"; approved: boolean; reason?: string }
-  | { kind: "text"; text: string }
 
 /** RFC 5424 severities, most severe first. */
 export const SEVERITIES = [
