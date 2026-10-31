@@ -1,0 +1,90 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "oxc", "import", "react"],
+  "jsPlugins": [
+    {
+      "name": "jsdoc-js",
+      "specifier": "eslint-plugin-jsdoc"
+    },
+    {
+      "name": "tsdoc",
+      "specifier": "eslint-plugin-tsdoc"
+    }
+  ],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "perf": "warn"
+  },
+  "options": {
+    "typeAware": true,
+    "reportUnusedDisableDirectives": "warn"
+  },
+  "rules": {
+    "typescript/no-floating-promises": "error",
+    "no-await-in-loop": "off",
+    "tsdoc/syntax": "error",
+    "jsdoc-js/require-jsdoc": [
+      "error",
+      {
+        "publicOnly": true,
+        "require": {
+          "ArrowFunctionExpression": false,
+          "ClassDeclaration": true,
+          "ClassExpression": true,
+          "FunctionDeclaration": true,
+          "FunctionExpression": false,
+          "MethodDefinition": true
+        }
+      }
+    ],
+    "jsdoc-js/require-description": "error",
+    "jsdoc-js/check-param-names": "error",
+    "jsdoc-js/require-param": "off",
+    "jsdoc-js/require-param-description": "off",
+    "jsdoc-js/require-returns": "off",
+    "jsdoc-js/require-returns-description": "off",
+    "max-lines": [
+      "error",
+      {
+        "max": 810,
+        "skipBlankLines": true,
+        "skipComments": true
+      }
+    ],
+    "react/react-in-jsx-scope": "off",
+    "import/no-unassigned-import": [
+      "error",
+      {
+        "allow": ["**/*.css"]
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": ["**/*.test.ts", "**/*.test.tsx"],
+      "rules": {
+        "jsdoc-js/require-jsdoc": "off",
+        "jsdoc-js/require-description": "off",
+        "jsdoc-js/check-param-names": "off"
+      }
+    },
+    {
+      "files": [
+        "app/src/components/ui/**",
+        "app/src/components/theme-provider.tsx",
+        "app/src/hooks/**",
+        "app/src/lib/**"
+      ],
+      "rules": {
+        "jsdoc-js/require-jsdoc": "off",
+        "jsdoc-js/require-description": "off",
+        "typescript/no-unsafe-type-assertion": "off",
+        "typescript/consistent-return": "off",
+        "no-shadow": "off",
+        "react/no-array-index-key": "off"
+      }
+    }
+  ],
+  "ignorePatterns": ["**/node_modules/**", "**/dist/**", "coverage/**", "private/**", "tmp/**"]
+}
