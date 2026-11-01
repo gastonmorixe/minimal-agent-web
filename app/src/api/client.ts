@@ -9,6 +9,8 @@
 
 import { clearToken, getToken } from "./token.ts"
 import type {
+  CreateSessionInput,
+  CredentialInfo,
   HistoryMessage,
   ModelList,
   ModelRow,
@@ -101,6 +103,19 @@ function isTransport(value: unknown): value is TransportInfo {
   return value.kind === "provider" && typeof value.providerId === "string"
 }
 
+/** True for a well-formed credential entry. */
+export function isCredential(value: unknown): value is CredentialInfo {
+  return (
+    isRecord(value) &&
+    typeof value.providerId === "string" &&
+    typeof value.displayName === "string" &&
+    (value.authKind === "oauth" || value.authKind === "api-key") &&
+    typeof value.credentialName === "string" &&
+    typeof value.credentialLabel === "string" &&
+    typeof value.usable === "boolean"
+  )
+}
+
 function isModelRow(value: unknown): value is ModelRow {
   return (
     isRecord(value) &&
@@ -143,19 +158,30 @@ export async function listSessions(): Promise<SessionList> {
   return { backend: "core", transport: transportOf(body), sessions }
 }
 
-/** `GET /api/models`: the booted models and the default model id. */
+/** `GET /api/models`: the booted models, the usable credentials, and the deprecated default model id. */
 export async function listModels(): Promise<ModelList> {
   const body = await readJson(await apiFetch("/api/models"))
   const models = Array.isArray(body.models) ? body.models.filter(isModelRow) : []
+  const credentials = Array.isArray(body.credentials) ? body.credentials.filter(isCredential) : []
   const defaultModelId = typeof body.defaultModelId === "string" ? body.defaultModelId : ""
-  return { models, defaultModelId }
+  return { models, credentials, defaultModelId }
 }
 
-/** `POST /api/sessions`. */
-export async function createSession(): Promise<SessionSummary> {
-  const body = await send("/api/sessions", {})
-  if (!isSummary(body.session)) throw new ApiError(500, "the server sent no session")
-  return body.session
+/**
+ * `POST /api/sessions`. `model` is required in provider mode, omitted in
+ * scripted mode. `providerId` and `credentialName` pick the credential.
+ * Unknown keys stay out.
+ */
+export async function createSession(input: CreateSessionInput = {}): Promise<SessionSummary> {
+  const body: Record<string, string> = {}
+  if (input.model !== undefined) body.model = input.model
+  if (input.providerId !== undefined) body.providerId = input.providerId
+  if (input.credentialName !== undefined) body.credentialName = input.credentialName
+  if (input.cwd !== undefined) body.cwd = input.cwd
+  if (input.mode !== undefined) body.mode = input.mode
+  const response = await send("/api/sessions", body)
+  if (!isSummary(response.session)) throw new ApiError(500, "the server sent no session")
+  return response.session
 }
 
 /** `GET /api/sessions/:id`, or null when the session does not exist. */

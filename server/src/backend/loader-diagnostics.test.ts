@@ -130,8 +130,8 @@ describe("RuntimeBackend, loader diagnostics", () => {
     }
     const backend = new RuntimeBackend({ host: spyHost, retryCeilingMs: 5 })
     try {
-      const a = await backend.createSession({})
-      const b = await backend.createSession({})
+      const a = await backend.createSession({ model: stub.modelId })
+      const b = await backend.createSession({ model: stub.modelId })
       const turnA = await backend.startTurn(a.id, { text: "read the note" })
       const turnB = await backend.startTurn(b.id, { text: "read the note" })
       await Promise.all([drain(turnA.events), drain(turnB.events)])

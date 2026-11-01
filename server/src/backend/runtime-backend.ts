@@ -22,9 +22,9 @@
  * process start and passes the {@link BootedHost} here as
  * {@link RuntimeBackendOptions.host}. Each session then gets:
  *
- * - real credentials from `host.resolveAuth(model, providerId)`, with the
- *   provider of the model row, so a model id that two providers register
- *   gets the auth of the right one,
+ * - real credentials from `host.resolveAuth(model, providerId, credentialName)`,
+ *   with the provider of the model row, so a model id that two providers
+ *   register gets the auth of the right one,
  * - the host's `toolRegistry`, its own tool executor from
  *   `host.toolExecutorFor(model)` (core tools, then plugin tools, with the
  *   media context of its model), and a lifecycle port on the plugin hooks,
@@ -51,6 +51,10 @@
  * {@link RuntimeBackend.transport} tells the routes which mode runs, so the
  * app shows the scripted banner only in scripted mode.
  *
+ * The web never resumes a session: `createSession` always opens a new
+ * session, `providerId` and `credentialName` live only on that open, and
+ * a restart drops all in-memory sessions.
+ *
  * @module backend/runtime-backend
  */
 
@@ -71,6 +75,7 @@ import type { AgentEvent } from "@minimal-agent/core/sdk/events"
 import {
   BackendError,
   type CreateSessionInput,
+  type CredentialInfo,
   type ModelList,
   type SessionBackend,
   type SessionStatus,
@@ -203,31 +208,67 @@ async function* eventsOnly(entries: AsyncIterable<SessionEntry>): AsyncIterable<
   }
 }
 
-/** What {@link RuntimeBackend.transport} says in provider mode. */
+/** What {@link RuntimeBackend.transport} says in provider mode. `providerId` is compat only: the server picks no default and the UI must not display it as a default pick. */
 function providerTransport(host: BootedHost): TransportInfo {
-  const row = host.models.find((m) => m.id === host.defaultModelId)
-  const providerId = row?.providerId ?? host.providers[0] ?? "unknown"
+  const entries = host.listCredentials()
+  const usableCount = entries.filter((entry) => entry.credentialInfo?.usable ?? true).length
+  const providerId =
+    entries.find((entry) => entry.credentialInfo?.usable ?? true)?.providerId ??
+    entries[0]?.providerId ??
+    host.models[0]?.providerId ??
+    host.providers[0] ??
+    "unknown"
   return {
     kind: "provider",
     providerId,
-    description: `Replies come from provider "${providerId}", default model "${host.defaultModelId}".`,
+    description: `${usableCount} credentials ready: pick a credential and model per session.`,
   }
 }
 
-/** Find a booted model row by id. */
-function findRow(host: BootedHost, modelId: string): ModelRow | undefined {
-  return host.models.find((m) => m.id === modelId)
+/** Find a booted model row by id, scoped to one provider when set. */
+function findRow(host: BootedHost, modelId: string, providerId?: string): ModelRow | undefined {
+  if (providerId === undefined) return host.models.find((m) => m.id === modelId)
+  return host.models.find((m) => m.id === modelId && m.providerId === providerId)
 }
 
-/** Provider mode: real auth, host tools, no `sendFn`, and the row's context window. */
-async function providerParts(host: BootedHost, modelId: string): Promise<ModeSessionParts> {
-  const row = findRow(host, modelId)
+/**
+ * Provider mode: real auth, host tools, no `sendFn`, and the row's context
+ * window. `providerId` scopes the row lookup. `credentialName` selects one
+ * stored credential of the provider.
+ */
+async function providerParts(
+  host: BootedHost,
+  modelId: string,
+  providerId?: string,
+  credentialName?: string,
+): Promise<ModeSessionParts> {
+  if (credentialName !== undefined && providerId === undefined) {
+    throw new BackendError(
+      "credential_needs_provider",
+      `credentialName "${credentialName}" requires providerId: pick a provider for the credential`,
+    )
+  }
+  if (credentialName !== undefined && providerId !== undefined) {
+    const known = new Set(
+      host
+        .listCredentials()
+        .filter((entry) => entry.providerId === providerId)
+        .map((entry) => entry.credentialName),
+    )
+    if (!known.has(credentialName)) {
+      throw new BackendError(
+        "unknown_credential",
+        `unknown credential "${credentialName}" for provider "${providerId}": no stored credential with that name`,
+      )
+    }
+  }
+  const row = findRow(host, modelId, providerId)
   if (row === undefined) {
     throw new BackendError("unknown_model", `no booted provider registers model "${modelId}"`)
   }
   let auth: Awaited<ReturnType<BootedHost["resolveAuth"]>>
   try {
-    auth = await host.resolveAuth(row.id, row.providerId)
+    auth = await host.resolveAuth(row.id, row.providerId, credentialName)
   } catch (error) {
     // The core message names the provider and the login command. It holds no secret.
     const reason = error instanceof Error ? error.message : String(error)
@@ -239,6 +280,7 @@ async function providerParts(host: BootedHost, modelId: string): Promise<ModeSes
     open: {
       model: row.id,
       providerId: row.providerId,
+      ...(credentialName !== undefined ? { credentialName } : {}),
       auth,
       toolRegistry: host.toolRegistry,
       // One executor per session: it carries the model context of this session.
@@ -283,17 +325,37 @@ export class RuntimeBackend implements SessionBackend {
     this.now = options.now ?? Date.now
   }
 
-  /** The models a session can use, and the default. Scripted mode has no model rows. */
+  /** What {@link SessionBackend.models} returns: model rows plus stored credentials. */
+  credentials(): CredentialInfo[] {
+    if (this.host === undefined) return []
+    return this.host.listCredentials().map((entry) => ({
+      providerId: entry.providerId,
+      displayName: entry.displayName,
+      authKind: entry.authKind,
+      credentialName: entry.credentialName ?? entry.credentialLabel ?? entry.displayName,
+      credentialLabel: entry.credentialLabel ?? entry.credentialName ?? entry.displayName,
+      usable: entry.credentialInfo?.usable ?? true,
+    }))
+  }
+
+  /** The models a session can use. Scripted mode has no model rows. */
   models(): ModelList {
-    if (this.host === undefined) return { models: [], defaultModelId: SCRIPTED_MODEL }
-    return { models: [...this.host.models], defaultModelId: this.host.defaultModelId }
+    if (this.host === undefined)
+      return { models: [], defaultModelId: SCRIPTED_MODEL, credentials: [] }
+    return {
+      models: [...this.host.models],
+      defaultModelId: this.host.defaultModelId,
+      credentials: this.credentials(),
+    }
   }
 
   /**
-   * Create a session.
+   * Create a session. Provider mode requires an explicit model: no default
+   * pick.
    *
    * @throws BackendError `cwd_mismatch` when `input.cwd` resolves to a
-   *   directory other than the server cwd
+   *   directory other than the server cwd; `unknown_model` when `input.model`
+   *   is missing or unregistered
    */
   async createSession(input: CreateSessionInput): Promise<SessionSummary> {
     if (input.cwd !== undefined && resolve(this.cwd, input.cwd) !== this.cwd) {
@@ -302,10 +364,16 @@ export class RuntimeBackend implements SessionBackend {
         `cwd must be the server cwd (${this.cwd}): tools run there, not in ${input.cwd}`,
       )
     }
+    if (this.host !== undefined && input.model === undefined) {
+      throw new BackendError(
+        "unknown_model",
+        "model is required: pick a credential and model per session",
+      )
+    }
     const parts =
       this.host === undefined
         ? this.scriptedParts(input)
-        : await providerParts(this.host, input.model ?? this.host.defaultModelId)
+        : await providerParts(this.host, input.model ?? "", input.providerId, input.credentialName)
     this.created++
     const id = `session-${this.created}`
     const session = this.runtime.openSession({

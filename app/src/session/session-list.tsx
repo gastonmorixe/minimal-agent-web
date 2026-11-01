@@ -1,31 +1,26 @@
 /**
- * The session list: every session, newest first, and a button for a new one.
+ * The session list: every session, newest first.
+ *
+ * Session creation lives in `session/new-session-dialog.tsx`: the person
+ * picks a credential and a model first, then the Create button fires.
  *
  * @module session/session-list
  */
 
-import { PlusIcon } from "lucide-react"
 import type { SessionSummary } from "@/api/types.ts"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
 
 /** Props of {@link SessionList}. */
 export interface SessionListProps {
   sessions: readonly SessionSummary[]
   activeId: string | null
   onOpen: (id: string) => void
-  onCreate: () => void
-  creating: boolean
 }
 
 /** The sidebar list of sessions. */
-export function SessionList({ sessions, activeId, onOpen, onCreate, creating }: SessionListProps) {
+export function SessionList({ sessions, activeId, onOpen }: SessionListProps) {
   return (
     <nav className="flex min-h-0 flex-col gap-2" aria-label="Sessions">
-      <Button onClick={onCreate} disabled={creating} size="sm" data-testid="new-session">
-        <PlusIcon />
-        New session
-      </Button>
       {sessions.length === 0 ? (
         <p className="px-1 text-sm text-muted-foreground">No sessions yet.</p>
       ) : (

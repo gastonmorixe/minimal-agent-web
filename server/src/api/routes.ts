@@ -10,7 +10,7 @@
  * | `GET /api/sessions/:id/events`    | Event log as SSE, `id: seq`, resumes at `Last-Event-ID` |
  * | `POST /api/sessions/:id/answers`  | `{ ok: true }`, body `{ askId, answer }`               |
  * | `POST /api/sessions/:id/abort`    | `{ aborted }`, body `{ reason? }` (optional)           |
- * | `GET /api/models`                 | `{ models, defaultModelId }` (`ModelRow[]`)            |
+ * | `GET /api/models`                 | `{ models, credentials, defaultModelId }`            |
  *
  * `GET /api/sessions` and `GET /api/sessions/:id` also carry `transport`:
  * `{kind: "provider", providerId, description}` when a booted provider
@@ -105,9 +105,13 @@ function optionalString(body: Record<string, unknown>, key: string): string | un
 function parseCreate(body: Record<string, unknown>): CreateSessionInput {
   const input: CreateSessionInput = {}
   const model = optionalString(body, "model")
+  const providerId = optionalString(body, "providerId")
+  const credentialName = optionalString(body, "credentialName")
   const cwd = optionalString(body, "cwd")
   const mode = optionalString(body, "mode")
   if (model !== undefined) input.model = model
+  if (providerId !== undefined) input.providerId = providerId
+  if (credentialName !== undefined) input.credentialName = credentialName
   if (cwd !== undefined) input.cwd = cwd
   if (mode !== undefined) input.mode = mode
   return input
@@ -156,6 +160,8 @@ export async function handleApi(request: Request, context: ApiContext): Promise<
         busy: 409,
         no_such_ask: 409,
         unknown_model: 400,
+        credential_needs_provider: 400,
+        unknown_credential: 400,
         auth_unavailable: 503,
         cwd_mismatch: 400,
       }[error.code]
