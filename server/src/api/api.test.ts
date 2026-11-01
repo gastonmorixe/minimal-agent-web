@@ -26,7 +26,11 @@ import { DefaultChatTransport, readUIMessageStream, type UIMessage, type UIMessa
 
 import type { HistoryMessage } from "../backend/history.ts"
 import { RuntimeBackend, SCRIPTED_MODEL } from "../backend/runtime-backend.ts"
-import { type StubProviderHome, writeStubProviderHome } from "../backend/stub-provider.fixture.ts"
+import {
+  type StubProviderHome,
+  stubBootOptions,
+  writeStubProviderHome,
+} from "../backend/stub-provider.fixture.ts"
 import { createScriptedTransport } from "../backend/transport/scripted-transport.ts"
 import type { ChatDataTypes } from "../chat-stream/chunks.ts"
 import { startServer } from "../server.ts"
@@ -525,28 +529,12 @@ describe("GET /api/models", () => {
     beforeAll(async () => {
       // A stub with no anonymousAuth and no auth file: host.resolveAuth fails.
       noAuthStub = writeStubProviderHome("apinoauth", { anonymousAuth: false })
-      const noAuthHost = await bootHost({
-        home: noAuthStub.home,
-        embeddedDir: noAuthStub.emptyDir,
-        projectDir: noAuthStub.emptyDir,
-        homeDir: null,
-        siblingDirs: [],
-        skipPluginSync: true,
-        model: noAuthStub.modelId,
-      })
+      const noAuthHost = await bootHost(stubBootOptions(noAuthStub))
       noAuthBackend = new RuntimeBackend({ host: noAuthHost, retryCeilingMs: 5 })
       noAuthServer = startServer({ appDir: root, backend: noAuthBackend, token: TOKEN })
 
       stub = writeStubProviderHome("apistub")
-      const host = await bootHost({
-        home: stub.home,
-        embeddedDir: stub.emptyDir,
-        projectDir: stub.emptyDir,
-        homeDir: null,
-        siblingDirs: [],
-        skipPluginSync: true,
-        model: stub.modelId,
-      })
+      const host = await bootHost(stubBootOptions(stub))
       providerBackend = new RuntimeBackend({ host, retryCeilingMs: 5 })
       providerServer = startServer({ appDir: root, backend: providerBackend, token: TOKEN })
     })

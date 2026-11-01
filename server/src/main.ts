@@ -13,10 +13,14 @@
  *
  * Environment:
  * - `MA_WEB_SCRIPTED=1`: scripted mode. No boot, no provider, no tools.
- * - `MINIMAL_AGENT_HOME`, `MINIMAL_AGENT_NO_PLUGIN_SYNC`,
- *   `MINIMAL_AGENT_PLUGIN_SIBLINGS`, `MINIMAL_AGENT_DISABLE_PLUGINS`,
+ * - `MINIMAL_AGENT_HOME`, `MINIMAL_AGENT_DISABLE_PLUGINS`,
  *   `MINIMAL_AGENT_ENABLE_PLUGINS`: read by `bootHost()` (core
  *   `docs/host-boot.md`).
+ * - `MINIMAL_AGENT_PLUGIN_SIBLINGS`: colon-separated dev-time plugin
+ *   checkouts. Read by {@link pluginRoots}. Default: the
+ *   `minimal-agent-plugins` dir next to this repo, when it exists.
+ * - The web host never clones plugins: it passes no `pluginSync`. So
+ *   `MINIMAL_AGENT_NO_PLUGIN_SYNC` has no effect here.
  * - `HOST` (default `127.0.0.1`) and `PORT` (default 4317).
  * - `MA_WEB_ALLOW_REMOTE=1` allows a non-loopback `HOST`. Without it the
  *   server refuses to start on one.
@@ -35,7 +39,8 @@
  *   web sessions are not CLI sessions, and must not share a directory with
  *   them.
  *
- * Trust: the boot loads plugin code from `<cwd>/.agents/plugins`, where
+ * Trust: the boot loads plugin code from `<cwd>/.agents/plugins` (the
+ * project root in {@link pluginRoots}), where
  * `<cwd>` is the directory the server starts in. Plugin code runs with the
  * full rights of the server process. Start the server only in a trusted
  * directory. In provider mode the start banner prints this warning.
@@ -48,14 +53,15 @@
  * @module main
  */
 
-import { join } from "node:path"
+import { existsSync, statSync } from "node:fs"
+import { dirname, join } from "node:path"
 
 import {
   type BootedHost,
   bootHost,
   type HostBootOptions,
 } from "@minimal-agent/core/host-kit/host-boot"
-import { resolveSiblingPluginRoots } from "@minimal-agent/core/host-kit/plugin-loader"
+import { resolveAgentHome } from "@minimal-agent/core/plugin-api/utils/agent-paths"
 
 import { RuntimeBackend } from "./backend/runtime-backend.ts"
 import { createScriptedTransport } from "./backend/transport/scripted-transport.ts"
@@ -64,7 +70,7 @@ import { startServer } from "./server.ts"
 
 const DEFAULT_PORT = 4317
 
-/** The repo root: the web install dir. `bootHost` scans `<root>/plugins` and `../minimal-agent-plugins`. */
+/** The repo root: the web install dir. See {@link pluginRoots}. */
 const INSTALL_DIR = join(import.meta.dir, "..", "..")
 
 function numberFromEnv(name: string): number | undefined {
@@ -72,17 +78,53 @@ function numberFromEnv(name: string): number | undefined {
   return value === undefined || value === "" ? undefined : Number(value)
 }
 
+/** The dir name of the dev-time plugins checkout next to this repo. */
+const PLUGINS_CHECKOUT_DIR = "minimal-agent-plugins"
+
+/** True when `path` is an existing directory. */
+function isDir(path: string): boolean {
+  try {
+    return existsSync(path) && statSync(path).isDirectory()
+  } catch {
+    return false
+  }
+}
+
 /**
- * The plugin roots for `bootHost`. The web host computes them here, in one
- * place, and passes each one explicitly: core plans to stop computing
- * plugin roots itself (S40).
+ * The dev-time plugins checkouts: `MINIMAL_AGENT_PLUGIN_SIBLINGS`
+ * (colon-separated), else `../minimal-agent-plugins` next to this repo.
+ * Only dirs that exist.
+ */
+function pluginCheckoutRoots(): string[] {
+  const fromEnv = process.env.MINIMAL_AGENT_PLUGIN_SIBLINGS
+  const candidates = fromEnv
+    ? fromEnv.split(":").filter((p) => p.length > 0)
+    : [join(dirname(INSTALL_DIR), PLUGINS_CHECKOUT_DIR)]
+  return candidates.filter(isDir)
+}
+
+/**
+ * The plugin roots for `bootHost`. Core knows no default plugin location
+ * (S40). The web host computes every root here, in this one place. Each
+ * root dir holds plugin package dirs directly:
+ *
+ * - embedded: `<install dir>/plugins`, then the dev-time checkouts.
+ * - user: `<agent home>/plugins`.
+ * - home: `$HOME/.agents/plugins`.
+ * - project: `<cwd>/.agents/plugins`. Trust: see the module doc.
+ *
+ * Provider plugins load from the embedded roots, then the user roots
+ * (core's default `providerRoots`). No `pluginSync`: the web host never
+ * clones plugins.
  */
 function pluginRoots(): HostBootOptions {
   return {
-    embeddedDir: INSTALL_DIR,
-    projectDir: process.cwd(),
-    siblingDirs: resolveSiblingPluginRoots(INSTALL_DIR),
-    ...(process.env.HOME ? { homeDir: join(process.env.HOME, ".agents") } : { homeDir: null }),
+    pluginRoots: {
+      embedded: [join(INSTALL_DIR, "plugins"), ...pluginCheckoutRoots()],
+      user: [join(resolveAgentHome(process.env), "plugins")],
+      home: process.env.HOME ? [join(process.env.HOME, ".agents", "plugins")] : [],
+      project: [join(process.cwd(), ".agents", "plugins")],
+    },
   }
 }
 

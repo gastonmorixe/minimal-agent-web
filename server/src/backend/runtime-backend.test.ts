@@ -16,12 +16,14 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 
 import { type BootedHost, bootHost } from "@minimal-agent/core/host-kit/host-boot"
 import type { AgentEvent } from "@minimal-agent/core/sdk/events"
+import type { ToolExecutor } from "@minimal-agent/core/sdk/ports"
 
 import { BackendError } from "./backend.ts"
 import { RuntimeBackend } from "./runtime-backend.ts"
 import {
   readRecordedAuth,
   type StubProviderHome,
+  stubBootOptions,
   writeStubProviderHome,
 } from "./stub-provider.fixture.ts"
 
@@ -32,15 +34,7 @@ let backend: RuntimeBackend
 
 beforeAll(async () => {
   stub = writeStubProviderHome("rbstub")
-  host = await bootHost({
-    home: stub.home,
-    embeddedDir: stub.emptyDir,
-    projectDir: stub.emptyDir,
-    homeDir: null,
-    siblingDirs: [],
-    skipPluginSync: true,
-    model: stub.modelId,
-  })
+  host = await bootHost(stubBootOptions(stub))
   backend = new RuntimeBackend({ host, retryCeilingMs: 5 })
 })
 
@@ -109,11 +103,11 @@ describe("RuntimeBackend, provider mode", () => {
     // auth goes to the provider as it is. So the spy returns one with a
     // value that nothing else makes.
     const sentinel = { kind: "custom" as const, headers: { "x-stub-sentinel": "from-resolve" } }
-    const asked: string[] = []
+    const asked: Array<[string, string | undefined]> = []
     const spyHost: BootedHost = {
       ...host,
-      resolveAuth: (modelId) => {
-        asked.push(modelId)
+      resolveAuth: (modelId, providerId) => {
+        asked.push([modelId, providerId])
         return Promise.resolve({ type: "provider", auth: sentinel })
       },
     }
@@ -121,7 +115,9 @@ describe("RuntimeBackend, provider mode", () => {
     try {
       const before = readRecordedAuth(stub).length
       const session = await spyBackend.createSession({})
-      expect(asked).toEqual([stub.modelId])
+      // The backend names the provider of the model row, so a model id that
+      // two providers register resolves the auth of the right one.
+      expect(asked).toEqual([[stub.modelId, stub.providerId]])
       const turn = await spyBackend.startTurn(session.id, { text: "read the note" })
       await collect(turn.events)
       const recorded = readRecordedAuth(stub).slice(before)
@@ -129,6 +125,34 @@ describe("RuntimeBackend, provider mode", () => {
       expect(recorded).toEqual([sentinel, sentinel])
       // Never the scripted-mode placeholder.
       expect(JSON.stringify(recorded)).not.toContain("unused-scripted-transport")
+    } finally {
+      spyBackend.close()
+    }
+  })
+
+  test("each session gets its own tool executor for its model", async () => {
+    const made: Array<{ modelId: string; executor: ToolExecutor }> = []
+    const spyHost: BootedHost = {
+      ...host,
+      toolExecutorFor: (modelId, options) => {
+        const executor = host.toolExecutorFor(modelId, options)
+        made.push({ modelId, executor })
+        return executor
+      },
+    }
+    const spyBackend = new RuntimeBackend({ host: spyHost, retryCeilingMs: 5 })
+    try {
+      const first = await spyBackend.createSession({})
+      const second = await spyBackend.createSession({})
+      expect(made.map((m) => m.modelId)).toEqual([stub.modelId, stub.modelId])
+      expect(made[0]?.executor).not.toBe(made[1]?.executor)
+      expect(made[0]?.executor).not.toBe(host.toolExecutor)
+      // The session runs its tools on its own executor.
+      const events = await collect(
+        (await spyBackend.startTurn(first.id, { text: "read the note" })).events,
+      )
+      expect(JSON.stringify(events)).toContain(stub.fileText)
+      expect(second.id).not.toBe(first.id)
     } finally {
       spyBackend.close()
     }

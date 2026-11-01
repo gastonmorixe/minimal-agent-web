@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -203,6 +203,10 @@ describe("main.ts", () => {
       MA_WEB_SCRIPTED: "",
     }
   }
+
+  test("the web host never clones plugins: main.ts passes no pluginSync", () => {
+    expect(readFileSync(MAIN, "utf8")).not.toMatch(/pluginSync\s*[:,}]/)
+  })
 
   /** Spawn main.ts. Scripted mode unless `env` says otherwise. */
   function runMain(env: Record<string, string>) {
