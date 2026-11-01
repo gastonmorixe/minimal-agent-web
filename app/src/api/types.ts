@@ -34,11 +34,34 @@ export interface ModelRow {
   contextWindow: number
 }
 
+/** One credential the server can use (core credential entry, the fields the app reads). */
+export interface CredentialInfo {
+  providerId: string
+  displayName: string
+  authKind: "oauth" | "api-key"
+  credentialName: string
+  credentialLabel: string
+  usable: boolean
+}
+
 /** `GET /api/models`. Empty `models` in scripted mode. */
 export interface ModelList {
   models: ModelRow[]
-  /** The model a new session uses. The app has no model picker (v1). */
+  credentials: CredentialInfo[]
+  /**
+   * Deprecated. The app must not auto-pick a model.
+   * The person picks a credential and a model for each new session.
+   */
   defaultModelId: string
+}
+
+/** `POST /api/sessions` body, client side. `model` required in provider mode, omitted in scripted mode. */
+export interface CreateSessionInput {
+  model?: string
+  providerId?: string
+  credentialName?: string
+  cwd?: string
+  mode?: string
 }
 
 /** What a session is doing now. */

@@ -508,7 +508,11 @@ describe("GET /api/models", () => {
   test("scripted mode lists no model rows and the scripted default", async () => {
     const response = await api("/api/models")
     expect(response.status).toBe(200)
-    expect(await json(response)).toEqual({ models: [], defaultModelId: SCRIPTED_MODEL })
+    expect(await json(response)).toEqual({
+      models: [],
+      defaultModelId: SCRIPTED_MODEL,
+      credentials: [],
+    })
   })
 
   test("needs the bearer token and answers 405 for a wrong method", async () => {
@@ -573,13 +577,31 @@ describe("GET /api/models", () => {
       )
     })
 
-    test("the session list reports a provider transport", async () => {
+    test("the session list reports a provider transport with a compat providerId", async () => {
       const body = await json(await providerApi("/api/sessions"))
-      expect(body.transport).toEqual({
-        kind: "provider",
-        providerId: stub.providerId,
-        description: expect.any(String),
-      })
+      const transportValue: unknown = body["transport"]
+      if (!isRecord(transportValue) || transportValue["kind"] !== "provider") {
+        throw new Error(`not a provider transport: ${JSON.stringify(body["transport"])}`)
+      }
+      const providerValue: unknown = transportValue["providerId"]
+      const descriptionValue: unknown = transportValue["description"]
+      // providerId is compat only, never an empty signal. The exact id is
+      // unstable here because the model registry is process-wide (the stub
+      // that boots first wins the fallback), so only check non-empty.
+      if (!(typeof providerValue === "string" && providerValue.length > 0)) {
+        throw new Error(`empty compat providerId: ${JSON.stringify(body["transport"])}`)
+      }
+      if (
+        typeof descriptionValue !== "string" ||
+        !descriptionValue.includes("pick a credential and model per session")
+      ) {
+        throw new Error(`unexpected transport description: ${JSON.stringify(body["transport"])}`)
+      }
+    })
+
+    test("a session with no model is 400: no default pick", async () => {
+      const response = await providerApi("/api/sessions", { method: "POST", body: "{}" })
+      expect(response.status).toBe(400)
     })
 
     test("a session with an unknown model is 400", async () => {
@@ -592,7 +614,10 @@ describe("GET /api/models", () => {
     })
 
     test("a session for a model with no credentials is 503 and holds no secret", async () => {
-      const response = await noAuthApi("/api/sessions", { method: "POST", body: "{}" })
+      const response = await noAuthApi("/api/sessions", {
+        method: "POST",
+        body: JSON.stringify({ model: noAuthStub.modelId }),
+      })
       expect(response.status).toBe(503)
       const text = await response.text()
       const body: unknown = JSON.parse(text)

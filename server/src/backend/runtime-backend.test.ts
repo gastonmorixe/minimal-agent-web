@@ -51,18 +51,136 @@ async function collect(events: AsyncIterable<AgentEvent>): Promise<AgentEvent[]>
   return out
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof BackendError) return error.message
+  if (isRecord(error) && typeof error.message === "string") return error.message
+  return String(error)
+}
+
 describe("RuntimeBackend, provider mode", () => {
   test("the boot found the stub provider and its model", () => {
     expect(host.providers).toContain(stub.providerId)
     expect(host.models.map((m) => m.id)).toContain(stub.modelId)
   })
 
-  test("reports a provider transport, not a scripted one", () => {
+  test("reports a provider transport with a compat providerId and no default pick", () => {
     expect(backend.transport).toEqual({
       kind: "provider",
-      providerId: stub.providerId,
-      description: expect.stringContaining(stub.modelId),
+      providerId: expect.any(String),
+      description: expect.stringContaining("credentials ready"),
     })
+    if (backend.transport.kind !== "provider") throw new Error("not a provider transport")
+    // providerId is compat only, never an empty signal. The UI must not display it as a default pick.
+    expect(backend.transport.providerId.length).toBeGreaterThan(0)
+    expect(backend.transport.description).toContain("pick a credential and model per session")
+  })
+
+  test("the compat providerId prefers a usable credentialed provider", () => {
+    const mixed = new RuntimeBackend({
+      host: {
+        ...host,
+        listCredentials: () => [
+          {
+            providerId: "broken-provider",
+            displayName: "broken provider",
+            authKind: "api-key" as const,
+            source: "store" as const,
+            credentialName: "broken",
+            credentialLabel: "broken",
+            credentialInfo: { usable: false as boolean },
+          },
+          {
+            providerId: stub.providerId,
+            displayName: `${stub.providerId} provider`,
+            authKind: "api-key" as const,
+            source: "store" as const,
+            credentialName: "good",
+            credentialLabel: "good",
+            credentialInfo: { usable: true as boolean },
+          },
+        ],
+      },
+      retryCeilingMs: 5,
+    })
+    try {
+      // First usable credential wins, even when it is not the first entry.
+      expect(mixed.transport).toMatchObject({ kind: "provider", providerId: stub.providerId })
+    } finally {
+      mixed.close()
+    }
+  })
+
+  test("the transport description counts only usable credentials", () => {
+    const mixed = new RuntimeBackend({
+      host: {
+        ...host,
+        listCredentials: () => [
+          {
+            providerId: stub.providerId,
+            displayName: `${stub.providerId} provider`,
+            authKind: "api-key" as const,
+            source: "store" as const,
+            credentialName: "good",
+            credentialLabel: "good",
+            credentialInfo: { usable: true as boolean },
+          },
+          {
+            providerId: stub.providerId,
+            displayName: `${stub.providerId} provider`,
+            authKind: "api-key" as const,
+            source: "store" as const,
+            credentialName: "broken",
+            credentialLabel: "broken",
+            credentialInfo: { usable: false as boolean },
+          },
+        ],
+      },
+      retryCeilingMs: 5,
+    })
+    try {
+      expect(mixed.transport).toMatchObject({
+        kind: "provider",
+        providerId: stub.providerId,
+        description: "1 credentials ready: pick a credential and model per session.",
+      })
+    } finally {
+      mixed.close()
+    }
+  })
+
+  test("credentials default to usable when the entry has no credentialInfo", () => {
+    for (const entry of backend.credentials()) expect(entry.usable).toBe(true)
+  })
+
+  test("credentials pass through usable false from credentialInfo", () => {
+    const spyBackend = new RuntimeBackend({
+      host: {
+        ...host,
+        listCredentials: () => [
+          {
+            providerId: stub.providerId,
+            displayName: `${stub.providerId} provider`,
+            authKind: "api-key" as const,
+            source: "store" as const,
+            credentialName: "broken",
+            credentialLabel: "broken",
+            credentialInfo: { usable: false as boolean },
+          },
+        ],
+      },
+      retryCeilingMs: 5,
+    })
+    try {
+      expect(spyBackend.credentials()).toEqual([
+        expect.objectContaining({ credentialName: "broken", usable: false }),
+      ])
+    } finally {
+      spyBackend.close()
+    }
   })
 
   test("lists the booted models and the default model id", () => {
@@ -74,13 +192,22 @@ describe("RuntimeBackend, provider mode", () => {
   })
 
   test("a session takes its model and context window from the model row", async () => {
-    const session = await backend.createSession({})
+    const session = await backend.createSession({ model: stub.modelId })
     expect(session.model).toBe(stub.modelId)
     expect(session.contextWindow).toBe(stub.contextWindow)
   })
 
+  test("a session without a model is refused: no default pick", async () => {
+    const error: unknown = await backend.createSession({}).then(
+      () => null,
+      (reason: unknown) => reason,
+    )
+    expect(error).toBeInstanceOf(BackendError)
+    expect(error).toMatchObject({ code: "unknown_model" })
+  })
+
   test("a turn runs through the provider plugin and the host tools", async () => {
-    const session = await backend.createSession({})
+    const session = await backend.createSession({ model: stub.modelId })
     const turn = await backend.startTurn(session.id, { text: "read the note" })
     const events = await collect(turn.events)
     const types = events.map((e) => e.type)
@@ -103,21 +230,21 @@ describe("RuntimeBackend, provider mode", () => {
     // auth goes to the provider as it is. So the spy returns one with a
     // value that nothing else makes.
     const sentinel = { kind: "custom" as const, headers: { "x-stub-sentinel": "from-resolve" } }
-    const asked: Array<[string, string | undefined]> = []
+    const asked: Array<[string, string | undefined, string | undefined]> = []
     const spyHost: BootedHost = {
       ...host,
-      resolveAuth: (modelId, providerId) => {
-        asked.push([modelId, providerId])
+      resolveAuth: (modelId, providerId, credentialName) => {
+        asked.push([modelId, providerId, credentialName])
         return Promise.resolve({ type: "provider", auth: sentinel })
       },
     }
     const spyBackend = new RuntimeBackend({ host: spyHost, retryCeilingMs: 5 })
     try {
       const before = readRecordedAuth(stub).length
-      const session = await spyBackend.createSession({})
+      const session = await spyBackend.createSession({ model: stub.modelId })
       // The backend names the provider of the model row, so a model id that
       // two providers register resolves the auth of the right one.
-      expect(asked).toEqual([[stub.modelId, stub.providerId]])
+      expect(asked).toEqual([[stub.modelId, stub.providerId, undefined]])
       const turn = await spyBackend.startTurn(session.id, { text: "read the note" })
       await collect(turn.events)
       const recorded = readRecordedAuth(stub).slice(before)
@@ -142,8 +269,8 @@ describe("RuntimeBackend, provider mode", () => {
     }
     const spyBackend = new RuntimeBackend({ host: spyHost, retryCeilingMs: 5 })
     try {
-      const first = await spyBackend.createSession({})
-      const second = await spyBackend.createSession({})
+      const first = await spyBackend.createSession({ model: stub.modelId })
+      const second = await spyBackend.createSession({ model: stub.modelId })
       expect(made.map((m) => m.modelId)).toEqual([stub.modelId, stub.modelId])
       expect(made[0]?.executor).not.toBe(made[1]?.executor)
       expect(made[0]?.executor).not.toBe(host.toolExecutor)
@@ -160,7 +287,7 @@ describe("RuntimeBackend, provider mode", () => {
 
   test("without a spy, the provider gets the stub's anonymous auth", async () => {
     const before = readRecordedAuth(stub).length
-    const session = await backend.createSession({})
+    const session = await backend.createSession({ model: stub.modelId })
     await collect((await backend.startTurn(session.id, { text: "read the note" })).events)
     const recorded = readRecordedAuth(stub).slice(before)
     expect(recorded.length).toBe(2)
@@ -175,6 +302,123 @@ describe("RuntimeBackend, provider mode", () => {
     expect(error).toBeInstanceOf(BackendError)
     expect(error).toMatchObject({ code: "unknown_model" })
     expect((await backend.listSessions()).map((s) => s.model)).not.toContain("no-such-model")
+  })
+
+  test("a credentialName without a providerId is refused", async () => {
+    const error: unknown = await backend
+      .createSession({ model: stub.modelId, credentialName: "some-name" })
+      .then(
+        () => null,
+        (reason: unknown) => reason,
+      )
+    expect(error).toBeInstanceOf(BackendError)
+    expect(error).toMatchObject({ code: "credential_needs_provider" })
+    expect(errorMessage(error)).toContain("requires providerId")
+  })
+
+  test("an unknown credentialName for the provider is refused", async () => {
+    const error: unknown = await backend
+      .createSession({
+        model: stub.modelId,
+        providerId: stub.providerId,
+        credentialName: "no-such-credential",
+      })
+      .then(
+        () => null,
+        (reason: unknown) => reason,
+      )
+    expect(error).toBeInstanceOf(BackendError)
+    expect(error).toMatchObject({ code: "unknown_credential" })
+    expect(errorMessage(error)).toContain("no-such-credential")
+  })
+
+  test("a provider displayName is not a credentialName", async () => {
+    const display = `${stub.providerId} provider`
+    const spyHost: BootedHost = {
+      ...host,
+      listCredentials: () => [
+        {
+          providerId: stub.providerId,
+          displayName: display,
+          authKind: "api-key" as const,
+          source: "store" as const,
+          credentialName: "stored-cred",
+          credentialLabel: "stored-cred",
+        },
+      ],
+    }
+    const spyBackend = new RuntimeBackend({ host: spyHost, retryCeilingMs: 5 })
+    try {
+      // No entry carries the displayName as its credentialName.
+      expect(spyHost.listCredentials().map((entry) => entry.credentialName)).not.toContain(display)
+      const error: unknown = await spyBackend
+        .createSession({
+          model: stub.modelId,
+          providerId: stub.providerId,
+          credentialName: display,
+        })
+        .then(
+          () => null,
+          (reason: unknown) => reason,
+        )
+      expect(error).toBeInstanceOf(BackendError)
+      expect(error).toMatchObject({ code: "unknown_credential" })
+    } finally {
+      spyBackend.close()
+    }
+  })
+
+  test("an explicit provider and credential reach resolveAuth and the open session", async () => {
+    const name = "named-cred"
+    const asked: Array<[string, string | undefined, string | undefined]> = []
+    const credentialEntry = {
+      providerId: stub.providerId,
+      displayName: `${stub.providerId} provider`,
+      authKind: "api-key" as const,
+      source: "store" as const,
+      credentialName: name,
+      credentialLabel: name,
+    }
+    const sentinel = { kind: "custom" as const, headers: { "x-stub-sentinel": "named-resolve" } }
+    const spyHost: BootedHost = {
+      ...host,
+      listCredentials: () => [credentialEntry],
+      resolveAuth: (modelId, providerId, credentialName) => {
+        asked.push([modelId, providerId, credentialName])
+        return Promise.resolve({ type: "provider", auth: sentinel })
+      },
+    }
+    const spyBackend = new RuntimeBackend({ host: spyHost, retryCeilingMs: 5 })
+    const opened: Array<unknown> = []
+    const inner: unknown = spyBackend
+    if (!isRecord(inner)) throw new Error("no backend runtime")
+    const runtimeValue: unknown = inner["runtime"]
+    if (!isRecord(runtimeValue)) throw new Error("no backend runtime")
+    const originalOpen: unknown = runtimeValue["openSession"]
+    if (typeof originalOpen !== "function") throw new Error("no backend runtime")
+    runtimeValue["openSession"] = (options: unknown) => {
+      opened.push(options)
+      return Reflect.apply(originalOpen, runtimeValue, [options])
+    }
+    try {
+      const before = readRecordedAuth(stub).length
+      const session = await spyBackend.createSession({
+        model: stub.modelId,
+        providerId: stub.providerId,
+        credentialName: name,
+      })
+      expect(asked).toEqual([[stub.modelId, stub.providerId, name]])
+      const first = opened[0]
+      if (!isRecord(first)) throw new Error("no open options")
+      expect(first["providerId"]).toBe(stub.providerId)
+      expect(first["credentialName"]).toBe(name)
+      const turn = await spyBackend.startTurn(session.id, { text: "read the note" })
+      await collect(turn.events)
+      const recorded = readRecordedAuth(stub).slice(before)
+      expect(recorded).toEqual([sentinel, sentinel])
+    } finally {
+      spyBackend.close()
+    }
   })
 })
 

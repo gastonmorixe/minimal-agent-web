@@ -5,9 +5,9 @@
  * calls nothing. The server's `transport` decides the top line. In scripted
  * mode (`MA_WEB_SCRIPTED=1`, AGENTS.md, "Session backend") a banner shows on
  * every page, so a scripted reply is never taken for a real agent's. In
- * provider mode a short line names the provider and the default model from
- * `GET /api/models`. The app has no model picker (v1): each new session uses
- * the server's default model.
+ * provider mode a short line names the provider and the usable credential
+ * count from `GET /api/models`. The person picks a credential and a model
+ * for each new session. Nothing is auto-picked.
  *
  * @module App
  */
@@ -19,8 +19,10 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 
 import { createSession, listModels, listSessions, onUnauthorized } from "./api/client.ts"
 import { getToken } from "./api/token.ts"
-import type { ModelRow, SessionSummary, TransportInfo } from "./api/types.ts"
+import type { CredentialInfo, ModelRow, SessionSummary, TransportInfo } from "./api/types.ts"
+import { Button } from "./components/ui/button.tsx"
 import { type Route, useRoute } from "./router.ts"
+import { credentialMapFor, NewSessionPanel } from "./session/new-session-dialog.tsx"
 import { SessionList } from "./session/session-list.tsx"
 import { SessionPage } from "./session/session-page.tsx"
 
@@ -48,23 +50,28 @@ export function Locked() {
   )
 }
 
+/** Empty credential list. A stable default prop: no new array per render. */
+const EMPTY_CREDENTIALS: readonly CredentialInfo[] = []
+
 /**
  * The top line for `transport` from `GET /api/sessions`. Scripted mode: a
  * banner that says every reply is scripted. Provider mode: one line with the
- * provider and the default model, when it is known.
+ * usable credential count from `GET /api/models`. No provider guess: the
+ * server names no provider. The person picks a credential and a model
+ * for each new session. Nothing is auto-picked.
  */
 export function TransportBanner({
   transport,
-  defaultModel = null,
+  credentials = EMPTY_CREDENTIALS,
 }: {
   transport: TransportInfo
-  defaultModel?: ModelRow | null
+  credentials?: readonly CredentialInfo[]
 }) {
   if (transport.kind === "provider") {
+    const usable = credentials.filter((entry) => entry.usable).length
     return (
       <p className="text-xs text-muted-foreground" data-testid="provider-line">
-        Provider {transport.providerId}
-        {defaultModel !== null && ` · default model ${defaultModel.displayName}`}
+        {usable} credential{usable === 1 ? "" : "s"} ready: pick per session
       </p>
     )
   }
@@ -77,10 +84,33 @@ export function TransportBanner({
   )
 }
 
+/**
+ * The new session button for scripted mode (`MA_WEB_SCRIPTED=1`). Scripted
+ * mode has no models or credentials: one click creates a session with no
+ * model. The server accepts a model-less `POST /api/sessions` only when it
+ * runs without a booted host.
+ */
+export function ScriptedNewSessionButton({
+  creating,
+  onCreate,
+}: {
+  creating: boolean
+  onCreate: () => void
+}) {
+  return (
+    <Button onClick={onCreate} disabled={creating} size="sm" data-testid="new-session">
+      {creating ? "Creating..." : "New session"}
+    </Button>
+  )
+}
+
 function Shell() {
   const [route, navigate] = useRoute()
   const [transport, setTransport] = React.useState<TransportInfo | null>(null)
-  const [defaultModel, setDefaultModel] = React.useState<ModelRow | null>(null)
+  const [models, setModels] = React.useState<ModelRow[]>([])
+  const [credentials, setCredentials] = React.useState<CredentialInfo[]>([])
+  const [credentialKey, setCredentialKey] = React.useState("")
+  const [modelId, setModelId] = React.useState("")
   const [sessions, setSessions] = React.useState<SessionSummary[]>([])
   const [creating, setCreating] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
@@ -103,16 +133,51 @@ function Shell() {
   React.useEffect(() => {
     if (!providerMode) return
     void listModels()
-      .then((list) =>
-        setDefaultModel(list.models.find((m) => m.id === list.defaultModelId) ?? null),
-      )
-      .catch(() => setDefaultModel(null))
+      .then((list) => {
+        setModels(list.models)
+        setCredentials(list.credentials)
+      })
+      .catch(() => {
+        setModels([])
+        setCredentials([])
+      })
   }, [providerMode])
 
+  const credentialByKey = React.useMemo(() => credentialMapFor(credentials), [credentials])
+
+  function onCredentialChange(key: string) {
+    setCredentialKey(key)
+    setModelId("")
+  }
+
   async function onCreate() {
+    const credential = credentialByKey.get(credentialKey)
+    if (credential === undefined || modelId === "") return
+    // The select holds a composite `${providerId}:${modelId}` key (model ids
+    // collide across providers and can hold a colon). Strip this credential's
+    // provider prefix before the API call.
+    const prefix = `${credential.providerId}:`
+    const model = modelId.startsWith(prefix) ? modelId.slice(prefix.length) : modelId
     setCreating(true)
     try {
-      const session = await createSession()
+      const session = await createSession({
+        model,
+        providerId: credential.providerId,
+        credentialName: credential.credentialName,
+      })
+      refresh()
+      navigate({ name: "session", id: session.id, view: "chat" })
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason))
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  async function onCreateScripted() {
+    setCreating(true)
+    try {
+      const session = await createSession({})
       refresh()
       navigate({ name: "session", id: session.id, view: "chat" })
     } catch (reason) {
@@ -129,20 +194,41 @@ function Shell() {
     <div className="flex h-dvh flex-col">
       {transport !== null && (
         <div className="border-b px-4 py-2">
-          <TransportBanner transport={transport} defaultModel={defaultModel} />
+          <TransportBanner transport={transport} credentials={credentials} />
         </div>
       )}
       <div className="flex min-h-0 flex-1">
         <aside className="flex w-64 shrink-0 flex-col gap-3 border-r p-3">
           <p className="px-1 text-sm font-medium">minimal-agent</p>
+          {providerMode && (
+            <NewSessionPanel
+              models={models}
+              credentials={credentials}
+              credentialKey={credentialKey}
+              modelId={modelId}
+              creating={creating}
+              onCredentialChange={onCredentialChange}
+              onModelChange={setModelId}
+              onCreate={() => void onCreate()}
+            />
+          )}
+          {transport?.kind === "scripted" && (
+            <ScriptedNewSessionButton
+              creating={creating}
+              onCreate={() => void onCreateScripted()}
+            />
+          )}
           <SessionList
             sessions={sessions}
             activeId={activeId}
             onOpen={(id) => open({ name: "session", id, view: "chat" })}
-            onCreate={() => void onCreate()}
-            creating={creating}
           />
-          {error !== null && <p className="px-1 text-xs text-destructive">{error}</p>}
+          {error !== null && (
+            <Alert variant="destructive" data-testid="create-error">
+              <AlertTitle>New session failed</AlertTitle>
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
         </aside>
         <main className="flex min-h-0 min-w-0 flex-1 flex-col">
           {route.name === "session" ? (

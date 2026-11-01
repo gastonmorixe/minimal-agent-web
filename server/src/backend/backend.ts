@@ -34,17 +34,34 @@ export type TransportInfo =
   | { kind: "provider"; providerId: string; description: string }
   | { kind: "scripted"; description: string }
 
+/** One stored credential a session can use. */
+export interface CredentialInfo {
+  providerId: string
+  displayName: string
+  authKind: "oauth" | "api-key"
+  credentialName: string
+  credentialLabel: string
+  /** Whether the stored credential decodes into runtime auth. */
+  usable: boolean
+}
+
 /** What `GET /api/models` returns. */
 export interface ModelList {
   /** Booted model rows. Empty in scripted mode. */
   models: ModelRow[]
-  /** The model a new session uses when the request names none. */
+  /** Kept for compat. The server picks no default: each session names its model. @deprecated Use the models list; each session names its model. */
   defaultModelId: string
+  /** Stored credentials by provider. Empty in scripted mode. */
+  credentials: CredentialInfo[]
 }
 
-/** What `POST /api/sessions` accepts. Every field is optional. */
+/** What `POST /api/sessions` accepts. `model` is required in provider mode. */
 export interface CreateSessionInput {
   model?: string
+  /** Scope the model row and auth to this provider when set. */
+  providerId?: string
+  /** Select one stored credential of the provider when set. */
+  credentialName?: string
   /** Must resolve to the server cwd when set: tools run there. Else `cwd_mismatch`. */
   cwd?: string
   mode?: string
@@ -120,7 +137,8 @@ export interface SessionBackend {
 
 /**
  * Why a backend call failed: no such session, a turn already runs, no such
- * pending ask, no such model, no credentials for the model, or a client
+ * pending ask, no such model, a credentialName with no providerId, no such
+ * stored credential, no credentials for the model, or a client
  * `cwd` that is not the server cwd.
  */
 export type BackendErrorCode =
@@ -128,6 +146,8 @@ export type BackendErrorCode =
   | "busy"
   | "no_such_ask"
   | "unknown_model"
+  | "credential_needs_provider"
+  | "unknown_credential"
   | "auth_unavailable"
   | "cwd_mismatch"
 
