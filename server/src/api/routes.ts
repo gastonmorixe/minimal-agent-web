@@ -23,7 +23,9 @@
  * that is not the server cwd, 404 no
  * session, 405 wrong method, 409 busy session or no such pending ask, 503
  * no credentials for the model. The caller (`server.ts`)
- * checks the bearer token before any route runs.
+ * checks the bearer token before any route runs. Any other error goes up to
+ * `server.ts`, which logs it and answers a generic 500
+ * (`api/internal-error.ts`).
  *
  * @module api/routes
  */
