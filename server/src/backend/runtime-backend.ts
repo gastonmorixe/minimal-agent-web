@@ -15,61 +15,60 @@
  * its docs require). `runtime-backend.test.ts` and `api.test.ts` each
  * build their own `RuntimeBackend`, so tests never share one `Runtime`.
  *
- * ## Two scope decisions for S53
+ * ## Two modes (WEB-PLUGINS-001)
  *
- * **No tools.** `runtime.openSession` is called with no `toolRegistry` /
- * `toolExecutor`. Core's own docs call this out explicitly
- * (`src/runtime/build-core.ts`, `src/runtime/noop-tools.ts`): a runtime
- * session with neither runs a plain, tool-free turn. Rebuilding the CLI's
- * tool catalog (its plugin loader, its built-in tools, its tool-approval UI)
- * is a separate, much larger piece of host work, explicitly out of this
- * spec's scope. `tool_call` / `tool_output` / `tool_result` stay fully
- * wired in the chat-stream adapter and the trace view — they are real,
- * stable kinds of `AgentEvent` — they simply never fire with today's
- * sessions. A later spec that wants tools passes `toolRegistry` /
- * `toolExecutor` to {@link createSession} without touching anything else
- * downstream.
+ * **Provider mode** (the default for `bun run start`). `main.ts` calls
+ * core's `bootHost()` (`@minimal-agent/core/host-kit/host-boot`) once at
+ * process start and passes the {@link BootedHost} here as
+ * {@link RuntimeBackendOptions.host}. Each session then gets:
  *
- * **No real model provider.** Resolving a model to a provider adapter
- * (`src/llm/run.ts` in core) needs a provider PLUGIN registered — core ships
- * none; that is explicitly host/CLI territory
- * (`src/host/startup/provider-discovery-boot.ts`, which scans the sibling
- * `minimal-agent-plugins` repo). Loading plugins here would add a second
- * runtime dependency and reimplement a chunk of the CLI's boot sequence,
- * both out of scope (AGENTS.md: the server has one runtime dependency,
- * `@minimal-agent/core`). So every session gets `transport/scripted-transport.ts`
- * as its `sendFn` instead: a deterministic, keyword-scripted transport that
- * drives the REAL `AgentCore` loop (real events, real retry/backoff, real
- * permanent-pause) without a network call. This is "core-backed", not
- * "model-backed" — the gap is the model provider, not the session/event
- * pipeline, and it is the same gap for every caller of a bare
- * `createRuntime` today, CLI included, until that caller does its own
- * provider-plugin wiring. `GET /api/sessions` and `GET /api/sessions/:id`
- * report `transport: "scripted"` so the app can say this plainly instead of
- * implying a real model answers. Each session gets its own transport
- * instance (`RuntimeBackendOptions.sendFn` is a factory, called once per
+ * - real credentials from `host.resolveAuth(model)`,
+ * - the host's `toolRegistry` and `toolExecutor` (core tools, then plugin
+ *   tools), and a lifecycle port on the plugin hooks,
+ * - no `sendFn`, so core sends through the registered provider plugin,
+ * - the context window of the model's {@link ModelRow}.
+ *
+ * Tools run in the server process, with its working directory. The
+ * session's `cwd` is only recorded in its summary and `meta` record.
+ *
+ * **Scripted mode** (`MA_WEB_SCRIPTED=1` in `main.ts`, and the tests that
+ * pass no `host`). Every session gets `transport/scripted-transport.ts` as
+ * its `sendFn`: a deterministic, keyword-scripted transport that drives the
+ * real `AgentCore` loop (real events, real retry/backoff, real
+ * permanent-pause) with no network call and no tools. The session uses
+ * {@link SCRIPTED_MODEL} and placeholder credentials that the transport
+ * never reads. Each session gets its own transport instance
+ * (`RuntimeBackendOptions.sendFn` is a factory, called once per
  * `createSession`): the scripted transport's retry/quota attempt counters
- * are per-instance, so two sessions sharing one instance would corrupt
+ * are per-instance, so two sessions that share one instance would corrupt
  * each other's scripted retry counts.
+ *
+ * {@link RuntimeBackend.transport} tells the routes which mode runs, so the
+ * app shows the scripted banner only in scripted mode.
  *
  * @module backend/runtime-backend
  */
 
 import {
   createRuntime,
+  type OpenSessionOptions,
   type Runtime,
   type Session,
   type SessionEntry,
   type SubscribeOptions,
 } from "@minimal-agent/core"
+import type { BootedHost, ModelRow } from "@minimal-agent/core/host-kit/host-boot"
+import { createLifecyclePort } from "@minimal-agent/core/host-kit/lifecycle-port-adapter"
 import type { AgentEvent } from "@minimal-agent/core/sdk/events"
 
 import {
   BackendError,
   type CreateSessionInput,
+  type ModelList,
   type SessionBackend,
   type SessionStatus,
   type SessionSummary,
+  type TransportInfo,
   type TurnHandle,
 } from "./backend.ts"
 import { assistantMessageId } from "./history.ts"
@@ -78,13 +77,19 @@ import { createScriptedTransport, type ScriptedTransport } from "./transport/scr
 /** Options for {@link RuntimeBackend}. */
 export interface RuntimeBackendOptions {
   /**
-   * Builds the transport one session's `AgentCore` sends through. Called
-   * once per {@link createSession} call, never shared between sessions:
-   * the scripted transport's retry/quota attempt counters are per-instance
-   * (see `transport/scripted-transport.ts`), and two sessions sharing one
-   * instance would corrupt each other's counts (confirmed: two concurrent
-   * "retry" turns on a shared instance interleave their attempt counts).
-   * Default: a fresh {@link createScriptedTransport} per session.
+   * The booted host (provider mode). Each session uses its auth, tools,
+   * and model rows. Leave it out for scripted mode. See the module doc.
+   */
+  host?: BootedHost
+  /**
+   * Scripted mode only. Builds the transport one session's `AgentCore`
+   * sends through. Called once per {@link createSession} call, never shared
+   * between sessions: the scripted transport's retry/quota attempt counters
+   * are per-instance (see `transport/scripted-transport.ts`), and two
+   * sessions sharing one instance would corrupt each other's counts
+   * (confirmed: two concurrent "retry" turns on a shared instance
+   * interleave their attempt counts). Default: a fresh
+   * {@link createScriptedTransport} per session. Not allowed with `host`.
    */
   sendFn?: () => ScriptedTransport
   /** Persist sessions to disk (core's real `SessionStore` + durable event log). Default: memory only. */
@@ -102,17 +107,32 @@ export interface RuntimeBackendOptions {
   now?: () => number
 }
 
-/** Placeholder credentials: the scripted transport never reads them. */
+/** Scripted mode only. Placeholder credentials: the scripted transport never reads them. */
 const PLACEHOLDER_AUTH = { type: "api-key" as const, token: "unused-scripted-transport" }
 
 /** Default {@link RuntimeBackendOptions.retryCeilingMs}: fast enough to stay interactive. */
 export const DEFAULT_RETRY_CEILING_MS = 300
 
-/** A model id with no registry entry behind it: the scripted transport answers regardless. */
+/** Scripted mode only. A model id with no registry entry behind it: the scripted transport answers regardless. */
 export const SCRIPTED_MODEL = "scripted-test-model"
 
-/** No model capabilities are registered (no provider plugin loaded); this is a display-only placeholder. */
+/** Scripted mode only. No model row exists, so this is a display-only placeholder. */
 export const PLACEHOLDER_CONTEXT_WINDOW = 200_000
+
+/** What {@link RuntimeBackend.transport} says in scripted mode. */
+export const SCRIPTED_TRANSPORT: TransportInfo = {
+  kind: "scripted",
+  description:
+    "Every reply is a scripted transport, not a real model provider: see AGENTS.md, " +
+    '"Session backend".',
+}
+
+/** The parts of one session that differ between the two modes. */
+interface ModeSessionParts {
+  model: string
+  contextWindow: number
+  open: Omit<OpenSessionOptions, "id" | "retry" | "persist">
+}
 
 const TITLE_LENGTH = 60
 
@@ -171,10 +191,57 @@ async function* eventsOnly(entries: AsyncIterable<SessionEntry>): AsyncIterable<
   }
 }
 
+/** What {@link RuntimeBackend.transport} says in provider mode. */
+function providerTransport(host: BootedHost): TransportInfo {
+  const row = host.models.find((m) => m.id === host.defaultModelId)
+  const providerId = row?.providerId ?? host.providers[0] ?? "unknown"
+  return {
+    kind: "provider",
+    providerId,
+    description: `Replies come from provider "${providerId}", default model "${host.defaultModelId}".`,
+  }
+}
+
+/** Find a booted model row by id. */
+function findRow(host: BootedHost, modelId: string): ModelRow | undefined {
+  return host.models.find((m) => m.id === modelId)
+}
+
+/** Provider mode: real auth, host tools, no `sendFn`, and the row's context window. */
+async function providerParts(host: BootedHost, modelId: string): Promise<ModeSessionParts> {
+  const row = findRow(host, modelId)
+  if (row === undefined) {
+    throw new BackendError("unknown_model", `no booted provider registers model "${modelId}"`)
+  }
+  let auth: Awaited<ReturnType<BootedHost["resolveAuth"]>>
+  try {
+    auth = await host.resolveAuth(row.id)
+  } catch (error) {
+    // The core message names the provider and the login command. It holds no secret.
+    const reason = error instanceof Error ? error.message : String(error)
+    throw new BackendError("auth_unavailable", reason)
+  }
+  return {
+    model: row.id,
+    contextWindow: row.contextWindow,
+    open: {
+      model: row.id,
+      providerId: row.providerId,
+      auth,
+      toolRegistry: host.toolRegistry,
+      toolExecutor: host.toolExecutor,
+      lifecycle: createLifecyclePort(host.loader.hooks()),
+    },
+  }
+}
+
 /** The real session backend. See the module doc. */
 export class RuntimeBackend implements SessionBackend {
   readonly kind = "core"
+  /** Which mode runs. See the module doc. */
+  readonly transport: TransportInfo
   private readonly runtime: Runtime
+  private readonly host: BootedHost | undefined
   private readonly sendFnFactory: () => ScriptedTransport
   private readonly persistDir: string | undefined
   private readonly cwd: string | undefined
@@ -183,9 +250,18 @@ export class RuntimeBackend implements SessionBackend {
   private readonly sessions = new Map<string, SessionState>()
   private created = 0
 
-  /** Create the backend. It starts with no sessions. */
+  /**
+   * Create the backend. It starts with no sessions.
+   *
+   * @throws Error when both `host` and `sendFn` are set
+   */
   constructor(options: RuntimeBackendOptions = {}) {
+    if (options.host !== undefined && options.sendFn !== undefined) {
+      throw new Error("RuntimeBackend: sendFn is for scripted mode only; do not pass it with host")
+    }
     this.runtime = createRuntime({ now: options.now })
+    this.host = options.host
+    this.transport = options.host ? providerTransport(options.host) : SCRIPTED_TRANSPORT
     this.sendFnFactory = options.sendFn ?? (() => createScriptedTransport())
     this.persistDir = options.persistDir
     this.cwd = options.cwd
@@ -193,16 +269,23 @@ export class RuntimeBackend implements SessionBackend {
     this.now = options.now ?? Date.now
   }
 
+  /** The models a session can use, and the default. Scripted mode has no model rows. */
+  models(): ModelList {
+    if (this.host === undefined) return { models: [], defaultModelId: SCRIPTED_MODEL }
+    return { models: [...this.host.models], defaultModelId: this.host.defaultModelId }
+  }
+
   /** Create a session. */
-  createSession(input: CreateSessionInput): Promise<SessionSummary> {
+  async createSession(input: CreateSessionInput): Promise<SessionSummary> {
+    const parts =
+      this.host === undefined
+        ? this.scriptedParts(input)
+        : await providerParts(this.host, input.model ?? this.host.defaultModelId)
     this.created++
     const id = `session-${this.created}`
-    const model = input.model ?? SCRIPTED_MODEL
     const session = this.runtime.openSession({
       id,
-      model,
-      auth: PLACEHOLDER_AUTH,
-      sendFn: this.sendFnFactory(),
+      ...parts.open,
       ...(this.retryCeilingMs !== undefined ? { retry: { ceilingMs: this.retryCeilingMs } } : {}),
       ...(this.persistDir !== undefined
         ? { persist: { dir: this.persistDir, cwd: input.cwd ?? this.cwd ?? "/" } }
@@ -211,10 +294,10 @@ export class RuntimeBackend implements SessionBackend {
     const state: SessionState = {
       summary: {
         id,
-        model,
+        model: parts.model,
         cwd: input.cwd ?? this.cwd ?? "/",
         mode: input.mode ?? "default",
-        contextWindow: PLACEHOLDER_CONTEXT_WINDOW,
+        contextWindow: parts.contextWindow,
         createdAt: this.now(),
       },
       title: null,
@@ -223,9 +306,8 @@ export class RuntimeBackend implements SessionBackend {
       session,
     }
     this.sessions.set(id, state)
-    return Promise.resolve(this.summarize(state))
+    return this.summarize(state)
   }
-
   /** Every session, newest first. */
   listSessions(): Promise<SessionSummary[]> {
     return Promise.resolve(
@@ -295,6 +377,16 @@ export class RuntimeBackend implements SessionBackend {
   /** Close the runtime: every open session stops. */
   close(): void {
     this.runtime.close()
+  }
+
+  /** Scripted mode: the scripted transport, placeholder auth and context window. */
+  private scriptedParts(input: CreateSessionInput): ModeSessionParts {
+    const model = input.model ?? SCRIPTED_MODEL
+    return {
+      model,
+      contextWindow: PLACEHOLDER_CONTEXT_WINDOW,
+      open: { model, auth: PLACEHOLDER_AUTH, sendFn: this.sendFnFactory() },
+    }
   }
 
   private require(id: string): SessionState {

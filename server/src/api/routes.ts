@@ -10,15 +10,18 @@
  * | `GET /api/sessions/:id/events`    | Event log as SSE, `id: seq`, resumes at `Last-Event-ID` |
  * | `POST /api/sessions/:id/answers`  | `{ ok: true }`, body `{ askId, answer }`               |
  * | `POST /api/sessions/:id/abort`    | `{ aborted }`, body `{ reason? }` (optional)           |
+ * | `GET /api/models`                 | `{ models, defaultModelId }` (`ModelRow[]`)            |
  *
- * `GET /api/sessions` and `GET /api/sessions/:id` also carry `transport`
- * (`{kind: "scripted", description}`): every session's model replies are
- * scripted, not a real provider (`backend/runtime-backend.ts`'s module doc
- * explains why). The app shows this plainly instead of implying a real
+ * `GET /api/sessions` and `GET /api/sessions/:id` also carry `transport`:
+ * `{kind: "provider", providerId, description}` when a booted provider
+ * plugin answers, or `{kind: "scripted", description}` in scripted mode
+ * (`MA_WEB_SCRIPTED=1`, see `backend/runtime-backend.ts`'s module doc). The
+ * app shows a banner in scripted mode, so it never implies that a real
  * model answers.
  *
- * Errors are JSON `{ error }`: 400 bad body, 404 no session, 405 wrong
- * method, 409 busy session or no such pending ask. The caller (`server.ts`)
+ * Errors are JSON `{ error }`: 400 bad body or unknown model, 404 no
+ * session, 405 wrong method, 409 busy session or no such pending ask, 503
+ * no credentials for the model. The caller (`server.ts`)
  * checks the bearer token before any route runs.
  *
  * @module api/routes
@@ -26,16 +29,17 @@
 
 import type { SessionEntry } from "@minimal-agent/core"
 
-import { BackendError, type CreateSessionInput, type SessionBackend } from "../backend/backend.ts"
+import {
+  BackendError,
+  type CreateSessionInput,
+  type SessionBackend,
+  type TransportInfo,
+} from "../backend/backend.ts"
 import { historyFromEntries } from "../backend/history.ts"
 
 import { chatStreamResponse, eventLogResponse, type StreamOptions } from "./streams.ts"
 
-/** What `GET /api/sessions` and `GET /api/sessions/:id` say about the model transport. */
-export interface TransportInfo {
-  kind: "scripted"
-  description: string
-}
+export type { TransportInfo } from "../backend/backend.ts"
 
 /** What the routes need besides the request. */
 export interface ApiContext extends StreamOptions {
@@ -49,6 +53,7 @@ export const MAX_BODY_BYTES = 1024 * 1024
 /** Longest message text `POST /messages` accepts. */
 export const MAX_MESSAGE_CHARS = 100_000
 
+const MODELS = /^\/api\/models\/?$/u
 const SESSIONS = /^\/api\/sessions\/?$/u
 const SESSION = /^\/api\/sessions\/([^/]+)(?:\/(messages|events|answers|abort))?\/?$/u
 
@@ -143,7 +148,13 @@ export async function handleApi(request: Request, context: ApiContext): Promise<
   } catch (error) {
     if (error instanceof BadRequest) return failure(400, error.message)
     if (error instanceof BackendError) {
-      const status = { not_found: 404, busy: 409, no_such_ask: 409 }[error.code]
+      const status = {
+        not_found: 404,
+        busy: 409,
+        no_such_ask: 409,
+        unknown_model: 400,
+        auth_unavailable: 503,
+      }[error.code]
       return failure(status, error.message)
     }
     throw error
@@ -154,6 +165,11 @@ async function route(request: Request, context: ApiContext): Promise<Response> {
   const { backend, transport } = context
   const { pathname } = new URL(request.url)
   const { method } = request
+
+  if (MODELS.test(pathname)) {
+    if (method !== "GET") return methodNotAllowed("GET")
+    return json(backend.models())
+  }
 
   if (SESSIONS.test(pathname)) {
     if (method === "GET") {

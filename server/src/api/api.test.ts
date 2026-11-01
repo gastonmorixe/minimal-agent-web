@@ -5,10 +5,11 @@
  * chat stream is also read through the AI SDK's own client decode path
  * (`DefaultChatTransport`, `readUIMessageStream`).
  *
- * `ask_user` (a preflight ask) and `tool_call` never fire here: neither can
- * happen without a registered model provider or a tool registry, and this
- * backend has neither on purpose (see `backend/runtime-backend.ts`'s module
- * doc). Their wire mapping is covered at the adapter level instead
+ * `ask_user` (a preflight ask) and `tool_call` never fire in scripted mode:
+ * neither can happen without a registered model provider or a tool
+ * registry (see `backend/runtime-backend.ts`'s module doc). The real tool
+ * path is covered in `backend/runtime-backend.test.ts`, on a stub provider
+ * plugin. `GET /api/models` is covered here in both modes. Their wire mapping is covered at the adapter level instead
  * (`chat-stream/golden-runs.ts`'s `ask-turn` / `tool-turn` / `tool-error-turn`).
  * `RuntimeBackend.answer`'s `no_such_ask` error path is covered here directly.
  */
@@ -20,10 +21,12 @@ import { join } from "node:path"
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 
 import type { SessionEntry } from "@minimal-agent/core"
+import { bootHost } from "@minimal-agent/core/host-kit/host-boot"
 import { DefaultChatTransport, readUIMessageStream, type UIMessage, type UIMessageChunk } from "ai"
 
 import type { HistoryMessage } from "../backend/history.ts"
-import { RuntimeBackend } from "../backend/runtime-backend.ts"
+import { RuntimeBackend, SCRIPTED_MODEL } from "../backend/runtime-backend.ts"
+import { type StubProviderHome, writeStubProviderHome } from "../backend/stub-provider.fixture.ts"
 import { createScriptedTransport } from "../backend/transport/scripted-transport.ts"
 import type { ChatDataTypes } from "../chat-stream/chunks.ts"
 import { startServer } from "../server.ts"
@@ -487,5 +490,86 @@ describe("GET /api/sessions/:id/events", () => {
     expect(logB.every((entry) => entry.sessionId === b)).toBe(true)
     expect(logA[0]?.seq).toBe(0)
     expect(logB[0]?.seq).toBe(0)
+  })
+})
+
+describe("GET /api/models", () => {
+  test("scripted mode lists no model rows and the scripted default", async () => {
+    const response = await api("/api/models")
+    expect(response.status).toBe(200)
+    expect(await json(response)).toEqual({ models: [], defaultModelId: SCRIPTED_MODEL })
+  })
+
+  test("needs the bearer token and answers 405 for a wrong method", async () => {
+    const noToken = await fetch(new URL("/api/models", server.url))
+    expect(noToken.status).toBe(401)
+    expect((await api("/api/models", { method: "POST", body: "{}" })).status).toBe(405)
+  })
+
+  describe("provider mode", () => {
+    const savedHome = process.env.MINIMAL_AGENT_HOME
+    let stub: StubProviderHome
+    let providerBackend: RuntimeBackend
+    let providerServer: ReturnType<typeof startServer>
+
+    beforeAll(async () => {
+      stub = writeStubProviderHome("apistub")
+      const host = await bootHost({
+        home: stub.home,
+        embeddedDir: stub.emptyDir,
+        projectDir: stub.emptyDir,
+        homeDir: null,
+        siblingDirs: [],
+        skipPluginSync: true,
+        model: stub.modelId,
+      })
+      providerBackend = new RuntimeBackend({ host, retryCeilingMs: 5 })
+      providerServer = startServer({ appDir: root, backend: providerBackend, token: TOKEN })
+    })
+
+    afterAll(() => {
+      providerBackend.close()
+      void providerServer.stop(true)
+      if (savedHome === undefined) delete process.env.MINIMAL_AGENT_HOME
+      else process.env.MINIMAL_AGENT_HOME = savedHome
+      rmSync(stub.root, { recursive: true, force: true })
+    })
+
+    function providerApi(path: string, init: { method?: string; body?: string } = {}) {
+      return fetch(new URL(path, providerServer.url), { ...init, headers: HEADERS })
+    }
+
+    test("lists the booted model rows with a real context window", async () => {
+      const body = await json(await providerApi("/api/models"))
+      expect(body.defaultModelId).toBe(stub.modelId)
+      // The model registry is process-wide, so other test files can add rows too.
+      expect(body.models).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: stub.modelId,
+            providerId: stub.providerId,
+            contextWindow: stub.contextWindow,
+          }),
+        ]),
+      )
+    })
+
+    test("the session list reports a provider transport", async () => {
+      const body = await json(await providerApi("/api/sessions"))
+      expect(body.transport).toEqual({
+        kind: "provider",
+        providerId: stub.providerId,
+        description: expect.any(String),
+      })
+    })
+
+    test("a session with an unknown model is 400", async () => {
+      const response = await providerApi("/api/sessions", {
+        method: "POST",
+        body: JSON.stringify({ model: "no-such-model" }),
+      })
+      expect(response.status).toBe(400)
+      expect(String((await json(response)).error)).toContain("no-such-model")
+    })
   })
 })

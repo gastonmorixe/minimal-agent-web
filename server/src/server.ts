@@ -21,8 +21,11 @@ export interface ServerOptions {
   appDir: string
   /** What answers the session API. */
   backend: SessionBackend
-  /** What `GET /api/sessions` says about the model transport (see `backend/runtime-backend.ts`). */
-  transport: TransportInfo
+  /**
+   * What `GET /api/sessions` says about the model transport. Default:
+   * `backend.transport` (see `backend/runtime-backend.ts`).
+   */
+  transport?: TransportInfo
   /** The bearer token every `/api` request must carry. */
   token: string
   /** Defaults to `127.0.0.1` (spec 4.5). */
@@ -59,7 +62,8 @@ export function startServer(options: ServerOptions): ReturnType<typeof Bun.serve
   checkBindHost(hostname, options.allowRemoteBind ?? false)
   checkToken(options.token)
   const appDir = resolve(options.appDir)
-  const { backend, transport, token } = options
+  const { backend, token } = options
+  const transport = options.transport ?? backend.transport
   const keepAliveMs = options.keepAliveMs ?? DEFAULT_KEEP_ALIVE_MS
   return Bun.serve({
     hostname,

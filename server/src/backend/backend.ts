@@ -5,22 +5,41 @@
  * `createRuntime` / `openSession` (core S47, S53). Each method maps to one
  * core call: `createSession` to `runtime.openSession`, `startTurn` to
  * `session.run`, `subscribe` to `session.subscribe`, `answer` to
- * `session.answer`, `abort` to `session.abort`. See its module doc for the
- * two scope decisions it documents (no tools, a server-supplied transport
- * instead of a real model provider).
+ * `session.answer`, `abort` to `session.abort`. See its module doc for its
+ * two modes: provider mode (a booted host with real auth and tools) and
+ * scripted mode (`MA_WEB_SCRIPTED=1`, a scripted transport).
  *
  * Methods throw {@link BackendError} (async methods reject with it) for an
- * unknown session, a busy session, or an unknown ask. The routes turn its
+ * unknown session, a busy session, an unknown ask, an unknown model, or a
+ * model with no credentials. The routes turn its
  * `code` into an HTTP status.
  *
  * @module backend/backend
  */
 
 import type { SessionEntryListener, SubscribeOptions, Unsubscribe } from "@minimal-agent/core"
+import type { ModelRow } from "@minimal-agent/core/host-kit/host-boot"
 import type { AgentEvent } from "@minimal-agent/core/sdk/events"
 
 /** Which implementation answers the API. Always `"core"`; the app no longer shows a fake-backend banner. */
 export type BackendKind = "core"
+
+/**
+ * What `GET /api/sessions` and `GET /api/sessions/:id` say about the model
+ * transport. `provider`: a booted provider plugin answers. `scripted`: the
+ * scripted transport answers (`MA_WEB_SCRIPTED=1`), not a real model.
+ */
+export type TransportInfo =
+  | { kind: "provider"; providerId: string; description: string }
+  | { kind: "scripted"; description: string }
+
+/** What `GET /api/models` returns. */
+export interface ModelList {
+  /** Booted model rows. Empty in scripted mode. */
+  models: ModelRow[]
+  /** The model a new session uses when the request names none. */
+  defaultModelId: string
+}
 
 /** What `POST /api/sessions` accepts. Every field is optional. */
 export interface CreateSessionInput {
@@ -40,7 +59,7 @@ export interface SessionSummary {
   model: string
   cwd: string
   mode: string
-  /** A placeholder context window in tokens, for the Context element: no model registry is wired (see `runtime-backend.ts`). */
+  /** Context window in tokens, for the Context element. From the model row, or a placeholder in scripted mode. */
   contextWindow: number
   /** Epoch ms. */
   createdAt: number
@@ -66,7 +85,11 @@ export interface TurnHandle {
 /** The session backend. See the module doc. */
 export interface SessionBackend {
   readonly kind: BackendKind
-  /** Create a session. */
+  /** Which transport answers. */
+  readonly transport: TransportInfo
+  /** The models a session can use, and the default. */
+  models(): ModelList
+  /** Create a session. Rejects with `unknown_model` or `auth_unavailable`. */
   createSession(input: CreateSessionInput): Promise<SessionSummary>
   /** Every session, newest first. */
   listSessions(): Promise<SessionSummary[]>
@@ -93,10 +116,15 @@ export interface SessionBackend {
 }
 
 /**
- * Why a backend call failed: no such session, a turn already runs, or no
- * such pending ask.
+ * Why a backend call failed: no such session, a turn already runs, no such
+ * pending ask, no such model, or no credentials for the model.
  */
-export type BackendErrorCode = "not_found" | "busy" | "no_such_ask"
+export type BackendErrorCode =
+  | "not_found"
+  | "busy"
+  | "no_such_ask"
+  | "unknown_model"
+  | "auth_unavailable"
 
 /** A backend call failed for a reason the caller can act on. */
 export class BackendError extends Error {
