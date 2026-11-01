@@ -28,8 +28,10 @@
  * - no `sendFn`, so core sends through the registered provider plugin,
  * - the context window of the model's {@link ModelRow}.
  *
- * Tools run in the server process, with its working directory. The
- * session's `cwd` is only recorded in its summary and `meta` record.
+ * Tools run in the server process, with its working directory. So each
+ * session's `cwd` (in its summary and its persisted `meta` record) is
+ * `process.cwd()`. A client `cwd` that resolves to another directory is
+ * refused with `cwd_mismatch`: the server cannot run tools there.
  *
  * **Scripted mode** (`MA_WEB_SCRIPTED=1` in `main.ts`, and the tests that
  * pass no `host`). Every session gets `transport/scripted-transport.ts` as
@@ -48,6 +50,8 @@
  *
  * @module backend/runtime-backend
  */
+
+import { resolve } from "node:path"
 
 import {
   createRuntime,
@@ -94,8 +98,6 @@ export interface RuntimeBackendOptions {
   sendFn?: () => ScriptedTransport
   /** Persist sessions to disk (core's real `SessionStore` + durable event log). Default: memory only. */
   persistDir?: string
-  /** `cwd` recorded in each session's `meta` record, when persisting. */
-  cwd?: string
   /**
    * Retry backoff ceiling for every session, in ms. Default
    * {@link DEFAULT_RETRY_CEILING_MS}: core's own default (60 s) is tuned for
@@ -244,7 +246,8 @@ export class RuntimeBackend implements SessionBackend {
   private readonly host: BootedHost | undefined
   private readonly sendFnFactory: () => ScriptedTransport
   private readonly persistDir: string | undefined
-  private readonly cwd: string | undefined
+  /** The server process cwd: where tools run. Each session records it. */
+  private readonly cwd: string
   private readonly retryCeilingMs: number | undefined
   private readonly now: () => number
   private readonly sessions = new Map<string, SessionState>()
@@ -264,7 +267,7 @@ export class RuntimeBackend implements SessionBackend {
     this.transport = options.host ? providerTransport(options.host) : SCRIPTED_TRANSPORT
     this.sendFnFactory = options.sendFn ?? (() => createScriptedTransport())
     this.persistDir = options.persistDir
-    this.cwd = options.cwd
+    this.cwd = process.cwd()
     this.retryCeilingMs = options.retryCeilingMs ?? DEFAULT_RETRY_CEILING_MS
     this.now = options.now ?? Date.now
   }
@@ -275,8 +278,19 @@ export class RuntimeBackend implements SessionBackend {
     return { models: [...this.host.models], defaultModelId: this.host.defaultModelId }
   }
 
-  /** Create a session. */
+  /**
+   * Create a session.
+   *
+   * @throws BackendError `cwd_mismatch` when `input.cwd` resolves to a
+   *   directory other than the server cwd
+   */
   async createSession(input: CreateSessionInput): Promise<SessionSummary> {
+    if (input.cwd !== undefined && resolve(this.cwd, input.cwd) !== this.cwd) {
+      throw new BackendError(
+        "cwd_mismatch",
+        `cwd must be the server cwd (${this.cwd}): tools run there, not in ${input.cwd}`,
+      )
+    }
     const parts =
       this.host === undefined
         ? this.scriptedParts(input)
@@ -288,14 +302,14 @@ export class RuntimeBackend implements SessionBackend {
       ...parts.open,
       ...(this.retryCeilingMs !== undefined ? { retry: { ceilingMs: this.retryCeilingMs } } : {}),
       ...(this.persistDir !== undefined
-        ? { persist: { dir: this.persistDir, cwd: input.cwd ?? this.cwd ?? "/" } }
+        ? { persist: { dir: this.persistDir, cwd: this.cwd } }
         : {}),
     })
     const state: SessionState = {
       summary: {
         id,
         model: parts.model,
-        cwd: input.cwd ?? this.cwd ?? "/",
+        cwd: this.cwd,
         mode: input.mode ?? "default",
         contextWindow: parts.contextWindow,
         createdAt: this.now(),

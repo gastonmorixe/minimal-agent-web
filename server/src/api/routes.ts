@@ -19,7 +19,8 @@
  * app shows a banner in scripted mode, so it never implies that a real
  * model answers.
  *
- * Errors are JSON `{ error }`: 400 bad body or unknown model, 404 no
+ * Errors are JSON `{ error }`: 400 bad body, unknown model, or a `cwd`
+ * that is not the server cwd, 404 no
  * session, 405 wrong method, 409 busy session or no such pending ask, 503
  * no credentials for the model. The caller (`server.ts`)
  * checks the bearer token before any route runs.
@@ -154,6 +155,7 @@ export async function handleApi(request: Request, context: ApiContext): Promise<
         no_such_ask: 409,
         unknown_model: 400,
         auth_unavailable: 503,
+        cwd_mismatch: 400,
       }[error.code]
       return failure(status, error.message)
     }

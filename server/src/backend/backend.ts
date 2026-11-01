@@ -10,8 +10,9 @@
  * scripted mode (`MA_WEB_SCRIPTED=1`, a scripted transport).
  *
  * Methods throw {@link BackendError} (async methods reject with it) for an
- * unknown session, a busy session, an unknown ask, an unknown model, or a
- * model with no credentials. The routes turn its
+ * unknown session, a busy session, an unknown ask, an unknown model, a
+ * model with no credentials, or a client `cwd` that is not the server cwd.
+ * The routes turn its
  * `code` into an HTTP status.
  *
  * @module backend/backend
@@ -44,6 +45,7 @@ export interface ModelList {
 /** What `POST /api/sessions` accepts. Every field is optional. */
 export interface CreateSessionInput {
   model?: string
+  /** Must resolve to the server cwd when set: tools run there. Else `cwd_mismatch`. */
   cwd?: string
   mode?: string
 }
@@ -57,6 +59,7 @@ export interface SessionSummary {
   /** The first user message, shortened, or "New session". */
   title: string
   model: string
+  /** The server process cwd: where the session's tools run. */
   cwd: string
   mode: string
   /** Context window in tokens, for the Context element. From the model row, or a placeholder in scripted mode. */
@@ -89,7 +92,7 @@ export interface SessionBackend {
   readonly transport: TransportInfo
   /** The models a session can use, and the default. */
   models(): ModelList
-  /** Create a session. Rejects with `unknown_model` or `auth_unavailable`. */
+  /** Create a session. Rejects with `unknown_model`, `auth_unavailable`, or `cwd_mismatch`. */
   createSession(input: CreateSessionInput): Promise<SessionSummary>
   /** Every session, newest first. */
   listSessions(): Promise<SessionSummary[]>
@@ -117,7 +120,8 @@ export interface SessionBackend {
 
 /**
  * Why a backend call failed: no such session, a turn already runs, no such
- * pending ask, no such model, or no credentials for the model.
+ * pending ask, no such model, no credentials for the model, or a client
+ * `cwd` that is not the server cwd.
  */
 export type BackendErrorCode =
   | "not_found"
@@ -125,6 +129,7 @@ export type BackendErrorCode =
   | "no_such_ask"
   | "unknown_model"
   | "auth_unavailable"
+  | "cwd_mismatch"
 
 /** A backend call failed for a reason the caller can act on. */
 export class BackendError extends Error {

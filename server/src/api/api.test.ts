@@ -218,13 +218,13 @@ async function waitFor(check: () => Promise<boolean>): Promise<void> {
 
 describe("sessions", () => {
   test("creates, lists newest first, and reads a session", async () => {
-    const created = await post("/api/sessions", { model: "m1", cwd: "/w", mode: "plan" })
+    const created = await post("/api/sessions", { model: "m1", mode: "plan" })
     expect(created.status).toBe(201)
     const { session } = await json(created)
     if (!isRecord(session)) throw new Error("no session")
     expect(session).toMatchObject({
       model: "m1",
-      cwd: "/w",
+      cwd: process.cwd(),
       mode: "plan",
       title: "New session",
       status: "idle",
@@ -242,6 +242,13 @@ describe("sessions", () => {
     const found = await detail(second)
     expect(found).toMatchObject({ backend: "core", transport: TRANSPORT })
     expect(found.history).toEqual([])
+  })
+
+  test("answers 400 for a cwd that is not the server cwd", async () => {
+    const response = await post("/api/sessions", { cwd: join(process.cwd(), "elsewhere") })
+    expect(response.status).toBe(400)
+    expect(String((await json(response)).error)).toContain("cwd")
+    expect((await post("/api/sessions", { cwd: process.cwd() })).status).toBe(201)
   })
 
   test("answers 404 for an unknown session on every route", async () => {
@@ -511,8 +518,25 @@ describe("GET /api/models", () => {
     let stub: StubProviderHome
     let providerBackend: RuntimeBackend
     let providerServer: ReturnType<typeof startServer>
+    let noAuthStub: StubProviderHome
+    let noAuthBackend: RuntimeBackend
+    let noAuthServer: ReturnType<typeof startServer>
 
     beforeAll(async () => {
+      // A stub with no anonymousAuth and no auth file: host.resolveAuth fails.
+      noAuthStub = writeStubProviderHome("apinoauth", { anonymousAuth: false })
+      const noAuthHost = await bootHost({
+        home: noAuthStub.home,
+        embeddedDir: noAuthStub.emptyDir,
+        projectDir: noAuthStub.emptyDir,
+        homeDir: null,
+        siblingDirs: [],
+        skipPluginSync: true,
+        model: noAuthStub.modelId,
+      })
+      noAuthBackend = new RuntimeBackend({ host: noAuthHost, retryCeilingMs: 5 })
+      noAuthServer = startServer({ appDir: root, backend: noAuthBackend, token: TOKEN })
+
       stub = writeStubProviderHome("apistub")
       const host = await bootHost({
         home: stub.home,
@@ -530,6 +554,9 @@ describe("GET /api/models", () => {
     afterAll(() => {
       providerBackend.close()
       void providerServer.stop(true)
+      noAuthBackend.close()
+      void noAuthServer.stop(true)
+      rmSync(noAuthStub.root, { recursive: true, force: true })
       if (savedHome === undefined) delete process.env.MINIMAL_AGENT_HOME
       else process.env.MINIMAL_AGENT_HOME = savedHome
       rmSync(stub.root, { recursive: true, force: true })
@@ -537,6 +564,10 @@ describe("GET /api/models", () => {
 
     function providerApi(path: string, init: { method?: string; body?: string } = {}) {
       return fetch(new URL(path, providerServer.url), { ...init, headers: HEADERS })
+    }
+
+    function noAuthApi(path: string, init: { method?: string; body?: string } = {}) {
+      return fetch(new URL(path, noAuthServer.url), { ...init, headers: HEADERS })
     }
 
     test("lists the booted model rows with a real context window", async () => {
@@ -570,6 +601,18 @@ describe("GET /api/models", () => {
       })
       expect(response.status).toBe(400)
       expect(String((await json(response)).error)).toContain("no-such-model")
+    })
+
+    test("a session for a model with no credentials is 503 and holds no secret", async () => {
+      const response = await noAuthApi("/api/sessions", { method: "POST", body: "{}" })
+      expect(response.status).toBe(503)
+      const text = await response.text()
+      const body: unknown = JSON.parse(text)
+      expect(isRecord(body) && Object.keys(body)).toEqual(["error"])
+      expect(text).toContain(noAuthStub.providerId)
+      expect(text).not.toContain(TOKEN)
+      expect(text).not.toContain("anon-key-")
+      expect(text).not.toContain("unused-scripted-transport")
     })
   })
 })

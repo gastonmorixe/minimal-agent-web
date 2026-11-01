@@ -8,7 +8,9 @@
  * scripted `sendFn`, and the model row's context window.
  */
 
-import { rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 
@@ -17,7 +19,11 @@ import type { AgentEvent } from "@minimal-agent/core/sdk/events"
 
 import { BackendError } from "./backend.ts"
 import { RuntimeBackend } from "./runtime-backend.ts"
-import { type StubProviderHome, writeStubProviderHome } from "./stub-provider.fixture.ts"
+import {
+  readRecordedAuth,
+  type StubProviderHome,
+  writeStubProviderHome,
+} from "./stub-provider.fixture.ts"
 
 const savedHome = process.env.MINIMAL_AGENT_HOME
 let stub: StubProviderHome
@@ -97,6 +103,46 @@ describe("RuntimeBackend, provider mode", () => {
     expect((await backend.getSession(session.id))?.status).toBe("idle")
   })
 
+  test("each provider request gets the auth that host.resolveAuth gave", async () => {
+    // Core's send re-reads the auth store for an api-key or oauth auth, so
+    // that kind cannot show which auth the session got. A provider-native
+    // auth goes to the provider as it is. So the spy returns one with a
+    // value that nothing else makes.
+    const sentinel = { kind: "custom" as const, headers: { "x-stub-sentinel": "from-resolve" } }
+    const asked: string[] = []
+    const spyHost: BootedHost = {
+      ...host,
+      resolveAuth: (modelId) => {
+        asked.push(modelId)
+        return Promise.resolve({ type: "provider", auth: sentinel })
+      },
+    }
+    const spyBackend = new RuntimeBackend({ host: spyHost, retryCeilingMs: 5 })
+    try {
+      const before = readRecordedAuth(stub).length
+      const session = await spyBackend.createSession({})
+      expect(asked).toEqual([stub.modelId])
+      const turn = await spyBackend.startTurn(session.id, { text: "read the note" })
+      await collect(turn.events)
+      const recorded = readRecordedAuth(stub).slice(before)
+      // Two requests: the tool call, then the answer.
+      expect(recorded).toEqual([sentinel, sentinel])
+      // Never the scripted-mode placeholder.
+      expect(JSON.stringify(recorded)).not.toContain("unused-scripted-transport")
+    } finally {
+      spyBackend.close()
+    }
+  })
+
+  test("without a spy, the provider gets the stub's anonymous auth", async () => {
+    const before = readRecordedAuth(stub).length
+    const session = await backend.createSession({})
+    await collect((await backend.startTurn(session.id, { text: "read the note" })).events)
+    const recorded = readRecordedAuth(stub).slice(before)
+    expect(recorded.length).toBe(2)
+    for (const auth of recorded) expect(auth).toEqual(stub.anonymousAuth ?? {})
+  })
+
   test("an unknown model is refused before a session opens", async () => {
     const error: unknown = await backend.createSession({ model: "no-such-model" }).then(
       () => null,
@@ -105,5 +151,44 @@ describe("RuntimeBackend, provider mode", () => {
     expect(error).toBeInstanceOf(BackendError)
     expect(error).toMatchObject({ code: "unknown_model" })
     expect((await backend.listSessions()).map((s) => s.model)).not.toContain("no-such-model")
+  })
+})
+
+describe("RuntimeBackend, session cwd", () => {
+  // Tools run in the server process, so the session cwd is the process cwd.
+  let dir: string
+  let scripted: RuntimeBackend
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), "ma-web-cwd-"))
+    scripted = new RuntimeBackend({ persistDir: dir, retryCeilingMs: 5 })
+  })
+
+  afterAll(() => {
+    scripted.close()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  test("the summary and the persisted meta record the process cwd", async () => {
+    const session = await scripted.createSession({})
+    expect(session.cwd).toBe(process.cwd())
+    const firstLine = readFileSync(join(dir, `${session.id}.jsonl`), "utf8").split("\n")[0] ?? ""
+    expect(JSON.parse(firstLine)).toMatchObject({ kind: "meta", cwd: process.cwd() })
+  })
+
+  test("a client cwd equal to the process cwd is accepted", async () => {
+    const session = await scripted.createSession({ cwd: process.cwd() })
+    expect(session.cwd).toBe(process.cwd())
+  })
+
+  test("a client cwd that differs from the process cwd is refused", async () => {
+    const other = join(process.cwd(), "not-the-server-cwd")
+    const error: unknown = await scripted.createSession({ cwd: other }).then(
+      () => null,
+      (reason: unknown) => reason,
+    )
+    expect(error).toBeInstanceOf(BackendError)
+    expect(error).toMatchObject({ code: "cwd_mismatch" })
+    expect((await scripted.listSessions()).map((s) => s.cwd)).not.toContain(other)
   })
 })
