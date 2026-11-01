@@ -130,6 +130,31 @@ describe("mapChatStreamInput", () => {
     ])
   })
 
+  test("sends nothing for block_started and block_stopped", () => {
+    const inputs = events(
+      { type: "turn_started", turn: 1 },
+      { type: "block_started", itemType: "thinking", id: "1:thinking" },
+      { type: "thinking_delta", id: "1:thinking", text: "hm" },
+      { type: "block_stopped", itemType: "thinking", id: "1:thinking" },
+      { type: "block_started", itemType: "text", id: "1:text" },
+      { type: "text_delta", id: "1:text", text: "Hi." },
+      { type: "block_stopped", itemType: "text", id: "1:text" },
+      { type: "item_completed", itemType: "thinking", id: "1:0", text: "hm" },
+      { type: "item_completed", itemType: "text", id: "1:1", text: "Hi." },
+    )
+    const withoutEdges = inputs.filter(
+      (input) =>
+        input.kind !== "event" ||
+        (input.event.type !== "block_started" && input.event.type !== "block_stopped"),
+    )
+    const chunks = mapAll(inputs)
+    expect(chunks).toEqual(mapAll(withoutEdges))
+    expect(chunks.filter((chunk) => chunk.type === "reasoning-start")).toHaveLength(1)
+    expect(chunks.filter((chunk) => chunk.type === "reasoning-end")).toHaveLength(1)
+    expect(chunks.filter((chunk) => chunk.type === "text-start")).toHaveLength(1)
+    expect(chunks.filter((chunk) => chunk.type === "text-end")).toHaveLength(1)
+  })
+
   test("maps a failed tool to tool-output-error", () => {
     const chunks = mapAll(
       events(
