@@ -9,13 +9,19 @@
  *   on {@link StubProviderHome.readPath}.
  * - With a `tool_result` in the request, it answers with plain text.
  *
- * The stub declares `anonymousAuth`, so `host.resolveAuth` works with no
- * auth file. It never reads the credentials it gets.
+ * By default the stub declares `anonymousAuth`, so `host.resolveAuth` works
+ * with no auth file. With `anonymousAuth: false` it declares none, so
+ * `host.resolveAuth` fails (the 503 path).
+ *
+ * On each request, the stub appends the auth it gets (`ctx.auth`) as one
+ * JSON line to {@link StubProviderHome.authLog}. Read it with
+ * {@link readRecordedAuth}. A test uses it to prove which credentials reach
+ * the provider.
  *
  * @module backend/stub-provider.fixture
  */
 
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -39,6 +45,16 @@ export interface StubProviderHome {
   fileText: string
   /** Text of the final answer. */
   answerText: string
+  /** File the stub appends the auth of each request to, one JSON line each. */
+  authLog: string
+  /** The auth `anonymousAuth` returns, or `null` when the stub declares none. */
+  anonymousAuth: { kind: "api-key"; key: string } | null
+}
+
+/** Options for {@link writeStubProviderHome}. */
+export interface StubProviderOptions {
+  /** Declare `anonymousAuth`. Default `true`. With `false`, `host.resolveAuth` fails. */
+  anonymousAuth?: boolean
 }
 
 /** Context window the stub model registers. Not a common default, so a test can see it. */
@@ -49,7 +65,10 @@ export const STUB_CONTEXT_WINDOW = 123_456
  *
  * @param id - Provider id. Use a new id per test file: the model registry is process-wide.
  */
-export function writeStubProviderHome(id: string): StubProviderHome {
+export function writeStubProviderHome(
+  id: string,
+  options: StubProviderOptions = {},
+): StubProviderHome {
   const root = mkdtempSync(join(tmpdir(), `ma-web-${id}-`))
   const home = join(root, "home")
   const emptyDir = join(root, "empty")
@@ -60,12 +79,18 @@ export function writeStubProviderHome(id: string): StubProviderHome {
   const readPath = join(root, "note.txt")
   const fileText = `stub file text for ${id}`
   const answerText = `stub answer from ${id}`
+  const authLog = join(root, "auth.jsonl")
+  const anonymousAuth =
+    options.anonymousAuth === false ? null : { kind: "api-key" as const, key: `anon-key-${id}` }
   writeFileSync(readPath, `${fileText}\n`)
   writeFileSync(
     join(pluginDir, "provider.json"),
     JSON.stringify({ id, entry: "./index.ts", export: "providerPlugin" }),
   )
-  writeFileSync(join(pluginDir, "index.ts"), stubEntry(id, modelId, readPath, answerText))
+  writeFileSync(
+    join(pluginDir, "index.ts"),
+    stubEntry({ id, modelId, readPath, answerText, authLog, anonymousAuth }),
+  )
   return {
     root,
     home,
@@ -76,16 +101,42 @@ export function writeStubProviderHome(id: string): StubProviderHome {
     readPath,
     fileText,
     answerText,
+    authLog,
+    anonymousAuth,
   }
 }
 
+/** Every auth the stub got so far, oldest first. */
+export function readRecordedAuth(stub: StubProviderHome): unknown[] {
+  if (!existsSync(stub.authLog)) return []
+  return readFileSync(stub.authLog, "utf8")
+    .split("\n")
+    .filter((line) => line.length > 0)
+    .map((line): unknown => JSON.parse(line))
+}
+
+/** What {@link stubEntry} writes into the entry file. */
+interface StubEntryInput {
+  id: string
+  modelId: string
+  readPath: string
+  answerText: string
+  authLog: string
+  anonymousAuth: StubProviderHome["anonymousAuth"]
+}
+
 /** Source of the stub provider entry file. */
-function stubEntry(id: string, modelId: string, readPath: string, answerText: string): string {
+function stubEntry(input: StubEntryInput): string {
+  const { id, modelId, readPath, answerText, authLog, anonymousAuth } = input
   const q = (value: unknown) => JSON.stringify(value)
+  const anonymous = anonymousAuth === null ? "" : `anonymousAuth: () => (${q(anonymousAuth)}),`
   return `
+import { appendFileSync } from "node:fs"
+
 const usage = { inputTokens: 10, outputTokens: 5 }
 
-async function* run(req) {
+async function* run(req, _model, ctx) {
+  appendFileSync(${q(authLog)}, JSON.stringify(ctx.auth) + "\\n")
   const hasResult = JSON.stringify(req.messages).includes("tool_result")
   yield { type: "message_start", messageId: "stub-msg", modelId: req.modelId, initialUsage: usage }
   if (hasResult) {
@@ -107,7 +158,7 @@ export const providerPlugin = {
   id: ${q(id)},
   displayName: ${q(`${id} provider`)},
   shortCode: ${q(id.slice(0, 2))},
-  anonymousAuth: () => ({ kind: "api-key", key: "stub-anonymous" }),
+  ${anonymous}
   register(ctx) {
     ctx.providers.register({
       id: ${q(id)},

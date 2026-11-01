@@ -35,6 +35,12 @@
  *   web sessions are not CLI sessions, and must not share a directory with
  *   them.
  *
+ * Trust: the boot loads plugin code from `<cwd>/.agents/plugins`, where
+ * `<cwd>` is the directory the server starts in. Plugin code runs with the
+ * full rights of the server process. Start the server only in a trusted
+ * directory. In provider mode the start banner prints this warning.
+ * Each session's `cwd` is this directory too: tools run there.
+ *
  * The one line with the token is the start banner on stdout: the URL to open,
  * with the token in the fragment. Nothing else prints the token. No line
  * prints credentials: the boot diagnostics and the auth errors hold none.
@@ -157,6 +163,12 @@ try {
 const appUrl = new URL(process.env.MA_WEB_APP_URL ?? server.url.href)
 appUrl.hash = `token=${token}`
 console.log(`minimal-agent web: ${backend.transport.description}`)
+if (!scripted) {
+  console.log(
+    `minimal-agent web: plugins load from ${join(process.cwd(), ".agents", "plugins")} ` +
+      "(the start directory). Start the server only in a trusted directory.",
+  )
+}
 console.log(`minimal-agent web: open ${appUrl.href}`)
 function shutdown(): void {
   backend.close()
