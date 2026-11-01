@@ -10,6 +10,8 @@
 import { clearToken, getToken } from "./token.ts"
 import type {
   HistoryMessage,
+  ModelList,
+  ModelRow,
   SessionDetail,
   SessionList,
   SessionSummary,
@@ -94,7 +96,19 @@ function isHistoryMessage(value: unknown): value is HistoryMessage {
 const FALLBACK_TRANSPORT: TransportInfo = { kind: "scripted", description: "unknown transport" }
 
 function isTransport(value: unknown): value is TransportInfo {
-  return isRecord(value) && value.kind === "scripted" && typeof value.description === "string"
+  if (!isRecord(value) || typeof value.description !== "string") return false
+  if (value.kind === "scripted") return true
+  return value.kind === "provider" && typeof value.providerId === "string"
+}
+
+function isModelRow(value: unknown): value is ModelRow {
+  return (
+    isRecord(value) &&
+    typeof value.id === "string" &&
+    typeof value.providerId === "string" &&
+    typeof value.displayName === "string" &&
+    typeof value.contextWindow === "number"
+  )
 }
 
 function transportOf(body: Record<string, unknown>): TransportInfo {
@@ -127,6 +141,14 @@ export async function listSessions(): Promise<SessionList> {
   const body = await readJson(await apiFetch("/api/sessions"))
   const sessions = Array.isArray(body.sessions) ? body.sessions.filter(isSummary) : []
   return { backend: "core", transport: transportOf(body), sessions }
+}
+
+/** `GET /api/models`: the booted models and the default model id. */
+export async function listModels(): Promise<ModelList> {
+  const body = await readJson(await apiFetch("/api/models"))
+  const models = Array.isArray(body.models) ? body.models.filter(isModelRow) : []
+  const defaultModelId = typeof body.defaultModelId === "string" ? body.defaultModelId : ""
+  return { models, defaultModelId }
 }
 
 /** `POST /api/sessions`. */

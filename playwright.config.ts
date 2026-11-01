@@ -1,6 +1,7 @@
 /**
  * Playwright e2e suite (S58, updated for S53): the built app and the real
- * server (`RuntimeBackend`, the scripted transport) on Chromium.
+ * server (`RuntimeBackend` in scripted mode, `MA_WEB_SCRIPTED=1`) on Chromium.
+ * Scripted mode needs no provider plugin and no network.
  * `bun run test:e2e` runs it; `bun run check` runs it after the build.
  *
  * The suite uses the `@playwright/test` version whose Chromium build is
@@ -37,6 +38,7 @@ export default defineConfig({
     reuseExistingServer: false,
     env: {
       PORT: String(port),
+      MA_WEB_SCRIPTED: "1",
       MA_WEB_TOKEN: process.env.MA_WEB_TOKEN,
       MA_WEB_SCRIPT_STEP_MS: "20",
       MA_WEB_RETRY_CEILING_MS: "20",

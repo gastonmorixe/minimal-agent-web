@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 
 import { RuntimeBackend } from "./backend/runtime-backend.ts"
+import { writeStubProviderHome } from "./backend/stub-provider.fixture.ts"
 import { BindRefusedError } from "./security/security.ts"
 import { startServer } from "./server.ts"
 
@@ -192,12 +193,39 @@ describe("bind address (S57)", () => {
 describe("main.ts", () => {
   const MAIN = join(import.meta.dir, "main.ts")
 
+  /** Env that keeps the boot inside `home`: no clone, no sibling checkout, no real `~/.agents`. */
+  function hermeticBootEnv(home: string): Record<string, string> {
+    return {
+      MINIMAL_AGENT_HOME: home,
+      HOME: join(root, "fake-user-home"),
+      MINIMAL_AGENT_NO_PLUGIN_SYNC: "1",
+      MINIMAL_AGENT_PLUGIN_SIBLINGS: join(root, "no-such-siblings"),
+      MA_WEB_SCRIPTED: "",
+    }
+  }
+
+  /** Spawn main.ts. Scripted mode unless `env` says otherwise. */
   function runMain(env: Record<string, string>) {
+    const base: Record<string, string | undefined> = { ...process.env }
+    for (const key of ["MINIMAL_AGENT_CONFIG", "MINIMAL_AGENT_TEST_AUTH"]) delete base[key]
     return Bun.spawn(["bun", MAIN], {
-      env: { ...process.env, APP_DIR: appDir, PORT: "0", ...env },
+      env: { ...base, APP_DIR: appDir, PORT: "0", MA_WEB_SCRIPTED: "1", ...env },
       stdout: "pipe",
       stderr: "pipe",
     })
+  }
+
+  /** Read stdout until the start banner prints the URL. */
+  async function readBanner(child: ReturnType<typeof runMain>): Promise<string> {
+    const reader = child.stdout.getReader()
+    let out = ""
+    while (!out.includes("open ")) {
+      const { value, done } = await reader.read()
+      if (done) break
+      out += new TextDecoder().decode(value)
+    }
+    reader.releaseLock()
+    return out
   }
 
   test("refuses HOST=0.0.0.0 without MA_WEB_ALLOW_REMOTE=1", async () => {
@@ -206,15 +234,19 @@ describe("main.ts", () => {
     expect(await new Response(child.stderr).text()).toContain("refusing to bind 0.0.0.0")
   })
 
+  test("refuses a non-loopback HOST before the boot", async () => {
+    const home = join(root, "bind-home")
+    mkdirSync(home, { recursive: true })
+    const child = runMain({ ...hermeticBootEnv(home), HOST: "0.0.0.0" })
+    expect(await child.exited).toBe(2)
+    const err = await new Response(child.stderr).text()
+    expect(err).toContain("refusing to bind 0.0.0.0")
+    expect(err).not.toContain("no provider")
+  })
+
   test("prints the app URL with a fresh random token in the fragment only", async () => {
     const child = runMain({ MA_WEB_TOKEN: "" })
-    const reader = child.stdout.getReader()
-    let out = ""
-    while (!out.includes("open ")) {
-      const { value, done } = await reader.read()
-      if (done) break
-      out += new TextDecoder().decode(value)
-    }
+    const out = await readBanner(child)
     child.kill()
     await child.exited
     expect(out).toContain("scripted transport")
@@ -223,5 +255,58 @@ describe("main.ts", () => {
     expect(url.search).toBe("")
     expect(url.pathname).toBe("/")
     expect(url.hash).toMatch(/^#token=[A-Za-z0-9_-]{43}$/u)
+  })
+
+  test("exits 2 with a clear message when no provider resolves", async () => {
+    const home = join(root, "empty-home")
+    mkdirSync(join(home, "plugins"), { recursive: true })
+    const child = runMain(hermeticBootEnv(home))
+    expect(await child.exited).toBe(2)
+    const err = await new Response(child.stderr).text()
+    expect(err).toContain("minimal-agent web: no provider plugin resolved")
+    expect(err).toContain("MA_WEB_SCRIPTED=1")
+    expect(await new Response(child.stdout).text()).not.toContain("open ")
+  })
+
+  test("prints boot diagnostics to stderr", async () => {
+    const home = join(root, "deps-home")
+    const dir = join(home, "plugins", "llm-depsmissing")
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(
+      join(dir, "provider.json"),
+      JSON.stringify({ id: "depsmissing", entry: "./i.ts" }),
+    )
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { "left-pad": "1" } }))
+    // No import of the package: Bun could try to auto-install it.
+    writeFileSync(join(dir, "i.ts"), "export const providerPlugin = {}\n")
+    const child = runMain(hermeticBootEnv(home))
+    expect(await child.exited).toBe(2)
+    expect(await new Response(child.stderr).text()).toContain("boot plugin-deps-missing")
+  })
+
+  test("boots a provider plugin and serves its models", async () => {
+    const stub = writeStubProviderHome("mainstub")
+    const token = "main-test-token-0123456789-abcdefghijklmnop"
+    const child = runMain({ ...hermeticBootEnv(stub.home), MA_WEB_TOKEN: token })
+    try {
+      const out = await readBanner(child)
+      expect(out).toContain('provider "mainstub"')
+      expect(out).not.toContain("scripted transport")
+      const url = new URL(/open (\S+)/u.exec(out)?.[1] ?? "")
+      url.hash = ""
+      const headers = { authorization: `Bearer ${token}` }
+      expect((await fetch(new URL("/api/models", url))).status).toBe(401)
+      const models: unknown = await (await fetch(new URL("/api/models", url), { headers })).json()
+      expect(models).toMatchObject({
+        defaultModelId: stub.modelId,
+        models: [{ id: stub.modelId, providerId: "mainstub", contextWindow: stub.contextWindow }],
+      })
+      const list: unknown = await (await fetch(new URL("/api/sessions", url), { headers })).json()
+      expect(list).toMatchObject({ transport: { kind: "provider", providerId: "mainstub" } })
+    } finally {
+      child.kill()
+      await child.exited
+      rmSync(stub.root, { recursive: true, force: true })
+    }
   })
 })

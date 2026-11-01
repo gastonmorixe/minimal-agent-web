@@ -16,13 +16,29 @@ import type { UIMessage, UIMessageChunk } from "ai"
 export type BackendKind = "core"
 
 /**
- * What `GET /api/sessions` says about the model transport: every session's
- * replies are scripted, not a real provider (see the web repo's AGENTS.md,
- * "Session backend", and `server/src/backend/runtime-backend.ts`).
+ * What `GET /api/sessions` says about the model transport. `provider`: a
+ * booted provider plugin answers. `scripted`: the server runs with
+ * `MA_WEB_SCRIPTED=1`, and every reply is scripted, not a real model (see
+ * the web repo's AGENTS.md, "Session backend", and
+ * `server/src/backend/runtime-backend.ts`).
  */
-export interface TransportInfo {
-  kind: "scripted"
-  description: string
+export type TransportInfo =
+  | { kind: "provider"; providerId: string; description: string }
+  | { kind: "scripted"; description: string }
+
+/** One model the server booted (core's `ModelRow`, the fields the app reads). */
+export interface ModelRow {
+  id: string
+  providerId: string
+  displayName: string
+  contextWindow: number
+}
+
+/** `GET /api/models`. Empty `models` in scripted mode. */
+export interface ModelList {
+  models: ModelRow[]
+  /** The model a new session uses. The app has no model picker (v1). */
+  defaultModelId: string
 }
 
 /** What a session is doing now. */
