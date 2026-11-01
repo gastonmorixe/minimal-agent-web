@@ -11,7 +11,9 @@ import { type SessionEntry, serializeEntrySse } from "@minimal-agent/core"
 
 import type { SessionBackend, TurnHandle } from "../backend/backend.ts"
 import { UI_MESSAGE_STREAM_HEADERS } from "../chat-stream/chunks.ts"
-import { ChatStreamEncoder } from "../chat-stream/sse.ts"
+import { ChatStreamEncoder, encodeSseChunk } from "../chat-stream/sse.ts"
+
+import { INTERNAL_ERROR, logInternalError } from "./internal-error.ts"
 
 /** Options the streams share. */
 export interface StreamOptions {
@@ -74,6 +76,11 @@ class SseWriter {
   }
 }
 
+/** The text of the generic error part: no message, no stack. */
+function internalErrorText(requestId: string): string {
+  return `${INTERNAL_ERROR} (request ${requestId})`
+}
+
 /**
  * Stream one turn as an AI SDK UI message stream (spec 4.3). The response
  * ends after `finish` and `[DONE]`. When the client goes away the stream
@@ -93,18 +100,26 @@ export function chatStreamResponse(turn: TurnHandle, options: StreamOptions): Re
     async pull() {
       // A pull that enqueues nothing is not called again (WHATWG streams),
       // so read until an event produces parts or the run ends.
-      for (;;) {
-        const next = await events.next()
-        if (next.done) {
-          writer?.write(chat.end())
-          writer?.close()
-          return
+      try {
+        for (;;) {
+          const next = await events.next()
+          if (next.done) {
+            writer?.write(chat.end())
+            writer?.close()
+            return
+          }
+          const text = chat.push({ kind: "event", event: next.value })
+          if (text.length > 0) {
+            writer?.write(text)
+            return
+          }
         }
-        const text = chat.push({ kind: "event", event: next.value })
-        if (text.length > 0) {
-          writer?.write(text)
-          return
-        }
+      } catch (error) {
+        // Log the detail. Send the client a generic error part, then end the run.
+        const requestId = logInternalError(error, `chat stream ${turn.messageId}`)
+        writer?.write(encodeSseChunk({ type: "error", errorText: internalErrorText(requestId) }))
+        writer?.write(chat.end())
+        writer?.close()
       }
     },
     cancel() {
@@ -143,11 +158,27 @@ export function eventLogResponse(
       let unsubscribe = () => {}
       writer = new SseWriter(controller, options.keepAliveMs, () => unsubscribe())
       writer.write("retry: 1000\n\n")
-      unsubscribe = backend.subscribe(
-        sessionId,
-        (entry: SessionEntry) => writer?.write(serializeEntrySse(entry)),
-        { fromSeq },
-      )
+      // Log the detail. Send the client a generic error event, then close.
+      const fail = (error: unknown): void => {
+        const requestId = logInternalError(error, `event log ${sessionId}`)
+        writer?.write(
+          `event: error\ndata: ${JSON.stringify({ error: INTERNAL_ERROR, requestId })}\n\n`,
+        )
+        writer?.close()
+      }
+      const listener = (entry: SessionEntry): void => {
+        try {
+          writer?.write(serializeEntrySse(entry))
+        } catch (error) {
+          fail(error)
+        }
+      }
+      try {
+        unsubscribe = backend.subscribe(sessionId, listener, { fromSeq })
+      } catch (error) {
+        fail(error)
+        return
+      }
       request.signal.addEventListener("abort", () => writer?.stop(), { once: true })
     },
     cancel() {

@@ -11,6 +11,7 @@
 
 import { resolve, sep } from "node:path"
 
+import { internalErrorResponse, logInternalError } from "./api/internal-error.ts"
 import { handleApi, type TransportInfo } from "./api/routes.ts"
 import type { SessionBackend } from "./backend/backend.ts"
 import { checkBindHost, checkToken, isAuthorized, unauthorized } from "./security/security.ts"
@@ -65,21 +66,38 @@ export function startServer(options: ServerOptions): ReturnType<typeof Bun.serve
   const { backend, token } = options
   const transport = options.transport ?? backend.transport
   const keepAliveMs = options.keepAliveMs ?? DEFAULT_KEEP_ALIVE_MS
+  async function answer(
+    request: Request,
+    server: Pick<ReturnType<typeof Bun.serve>, "timeout">,
+  ): Promise<Response> {
+    const { pathname } = new URL(request.url)
+    if (pathname === "/api" || pathname.startsWith("/api/")) {
+      if (!isAuthorized(request, token)) return unauthorized()
+      // Streams stay open while a run waits; keep-alives replace the idle timeout.
+      server.timeout(request, 0)
+      return await handleApi(request, { backend, transport, keepAliveMs })
+    }
+    if (request.method !== "GET" && request.method !== "HEAD") {
+      return new Response("method not allowed", { status: 405 })
+    }
+    return await serveApp(appDir, pathname)
+  }
   return Bun.serve({
     hostname,
     port: options.port ?? 0,
+    // Never Bun's development error page: it sends the message and the stack.
+    development: false,
     async fetch(request, server) {
-      const { pathname } = new URL(request.url)
-      if (pathname === "/api" || pathname.startsWith("/api/")) {
-        if (!isAuthorized(request, token)) return withSecurityHeaders(unauthorized())
-        // Streams stay open while a run waits; keep-alives replace the idle timeout.
-        server.timeout(request, 0)
-        return withSecurityHeaders(await handleApi(request, { backend, transport, keepAliveMs }))
+      try {
+        return withSecurityHeaders(await answer(request, server))
+      } catch (error) {
+        const where = `${request.method} ${new URL(request.url).pathname}`
+        return withSecurityHeaders(internalErrorResponse(logInternalError(error, where)))
       }
-      if (request.method !== "GET" && request.method !== "HEAD") {
-        return withSecurityHeaders(new Response("method not allowed", { status: 405 }))
-      }
-      return withSecurityHeaders(await serveApp(appDir, pathname))
+    },
+    // The last guard: an error that escapes `fetch` gets the same generic answer.
+    error(error) {
+      return withSecurityHeaders(internalErrorResponse(logInternalError(error, "server")))
     },
   })
 }
