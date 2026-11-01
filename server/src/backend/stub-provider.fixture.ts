@@ -31,7 +31,7 @@ export interface StubProviderHome {
   root: string
   /** Agent home with `plugins/llm-<id>`. Pass it to `bootHost` as `home`. */
   home: string
-  /** An empty dir for `embeddedDir`, `projectDir`, and `homeDir`. */
+  /** An empty dir, for the plugin roots that must hold no plugin. */
   emptyDir: string
   /** Provider id. */
   providerId: string
@@ -55,6 +55,22 @@ export interface StubProviderHome {
 export interface StubProviderOptions {
   /** Declare `anonymousAuth`. Default `true`. With `false`, `host.resolveAuth` fails. */
   anonymousAuth?: boolean
+}
+
+/**
+ * The `bootHost` options that read only the stub home: the agent home and
+ * its `plugins` dir as the one user root. No `pluginSync`, so no clone.
+ */
+export function stubBootOptions(stub: StubProviderHome): {
+  home: string
+  pluginRoots: { user: string[]; project: string[] }
+  model: string
+} {
+  return {
+    home: stub.home,
+    pluginRoots: { user: [join(stub.home, "plugins")], project: [stub.emptyDir] },
+    model: stub.modelId,
+  }
 }
 
 /** Context window the stub model registers. Not a common default, so a test can see it. */

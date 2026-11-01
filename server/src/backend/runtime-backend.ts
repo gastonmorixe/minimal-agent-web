@@ -22,9 +22,12 @@
  * process start and passes the {@link BootedHost} here as
  * {@link RuntimeBackendOptions.host}. Each session then gets:
  *
- * - real credentials from `host.resolveAuth(model)`,
- * - the host's `toolRegistry` and `toolExecutor` (core tools, then plugin
- *   tools), and a lifecycle port on the plugin hooks,
+ * - real credentials from `host.resolveAuth(model, providerId)`, with the
+ *   provider of the model row, so a model id that two providers register
+ *   gets the auth of the right one,
+ * - the host's `toolRegistry`, its own tool executor from
+ *   `host.toolExecutorFor(model)` (core tools, then plugin tools, with the
+ *   media context of its model), and a lifecycle port on the plugin hooks,
  * - no `sendFn`, so core sends through the registered provider plugin,
  * - the context window of the model's {@link ModelRow}.
  *
@@ -217,7 +220,7 @@ async function providerParts(host: BootedHost, modelId: string): Promise<ModeSes
   }
   let auth: Awaited<ReturnType<BootedHost["resolveAuth"]>>
   try {
-    auth = await host.resolveAuth(row.id)
+    auth = await host.resolveAuth(row.id, row.providerId)
   } catch (error) {
     // The core message names the provider and the login command. It holds no secret.
     const reason = error instanceof Error ? error.message : String(error)
@@ -231,7 +234,8 @@ async function providerParts(host: BootedHost, modelId: string): Promise<ModeSes
       providerId: row.providerId,
       auth,
       toolRegistry: host.toolRegistry,
-      toolExecutor: host.toolExecutor,
+      // One executor per session: it carries the model context of this session.
+      toolExecutor: host.toolExecutorFor(row.id),
       lifecycle: createLifecyclePort(host.loader.hooks()),
     },
   }
