@@ -3,8 +3,10 @@
  * `bun run dev` (S60): the server and Vite together.
  *
  * - The server (`server/src/main.ts`) runs on `HOST`/`PORT` (default
- *   127.0.0.1:4317), with the fake backend, and does not serve the app in
- *   dev (`app/vite.config.ts`'s dev server does that).
+ *   127.0.0.1:4317) and does not serve the app in dev
+ *   (`app/vite.config.ts`'s dev server does that). The server boots the real
+ *   providers through core `bootHost`. Set `MA_WEB_SCRIPTED=1` to use the
+ *   scripted transport instead.
  * - Vite (`bun run --cwd app dev`) serves the app on its own port and
  *   proxies `/api` to the server (`API_TARGET`, same default).
  * - One token for the run, generated here and passed to the server. The
