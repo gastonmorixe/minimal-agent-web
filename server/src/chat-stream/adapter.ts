@@ -25,6 +25,8 @@
  * | `status`                  | `data-status` (transient)                          |
  * | `quota`                   | `data-usage` (`kind: "quota"`)                     |
  * | `user_message`            | nothing (the client already has it)                |
+ * | `block_started`           | nothing (the first delta opens the part)           |
+ * | `block_stopped`           | nothing (`item_completed` closes the part)         |
  * | `notice`                  | `data-notice`                                      |
  * | `error`                   | `error` (`errorText`)                              |
  * | `run_finished`, run end   | `finish` (then `data: [DONE]`, added by `sse.ts`)  |
@@ -192,6 +194,11 @@ function mapAgentEvent(draft: Draft, event: AgentEvent, chunks: UiMessageChunk[]
       return
     case "item_started":
       // The matching item_completed carries everything this event does.
+      return
+    case "block_started":
+    case "block_stopped":
+      // The first delta of a block already opens its part, and item_completed
+      // closes it. A part opened or closed here too would be sent twice.
       return
     case "item_completed":
       openStep(draft, chunks)

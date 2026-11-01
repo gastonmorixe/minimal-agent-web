@@ -122,12 +122,12 @@ async function* thinkingThenReply(
   opts: ScriptedSendOptions,
   stepDelayMs: number,
 ): AsyncGenerator<string, ScriptedStreamedResponse, undefined> {
-  await opts.onThinkingStart?.()
+  await opts.onBlockEdge?.({ block: "thinking", edge: "start" })
   for (const piece of words(thinking)) {
     await sleep(stepDelayMs, opts.signal)
     await opts.onThinkingDelta?.(piece)
   }
-  await opts.onThinkingStop?.()
+  await opts.onBlockEdge?.({ block: "thinking", edge: "stop" })
   for (const piece of words(text)) {
     await sleep(stepDelayMs, opts.signal)
     yield piece
