@@ -141,6 +141,13 @@ interface ModeSessionParts {
 
 const TITLE_LENGTH = 60
 
+/**
+ * Time in ms that a preflight `ask_user` waits for `POST .../answers`. Then
+ * core resolves it with its default option, or declines it. Decision 11: no
+ * human is assumed, so an ask never waits forever.
+ */
+export const ASK_DEADLINE_MS = 5 * 60_000
+
 interface SessionState {
   summary: Omit<SessionSummary, "status" | "updatedAt" | "title" | "runs">
   title: string | null
@@ -304,6 +311,9 @@ export class RuntimeBackend implements SessionBackend {
     const session = this.runtime.openSession({
       id,
       ...parts.open,
+      // The web UI answers asks through `session.answer` (`answer()` below).
+      askUserFallback: "registry",
+      askDeadlineMs: ASK_DEADLINE_MS,
       ...(this.retryCeilingMs !== undefined ? { retry: { ceilingMs: this.retryCeilingMs } } : {}),
       ...(this.persistDir !== undefined
         ? { persist: { dir: this.persistDir, cwd: this.cwd } }
