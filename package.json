@@ -11,7 +11,7 @@
     "url": "git+https://github.com/gastonmorixe/minimal-agent-web.git"
   },
   "engines": {
-    "bun": ">=1.4.2"
+    "bun": ">=1.4.4"
   },
   "workspaces": [
     "server",
@@ -39,16 +39,16 @@
     "@minimal-agent/core": "git+ssh://git@github.com/gastonmorixe/minimal-agent-core.git#1e91520f757f964372fab16a3fd75774bae0a75e"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.15",
-    "@commitlint/cli": "^21.2.3",
-    "@commitlint/config-conventional": "^21.2.3",
+    "@biomejs/biome": "2.6.6",
+    "@commitlint/cli": "^21.2.4",
+    "@commitlint/config-conventional": "^21.2.4",
     "@playwright/test": "1.56.1",
     "@types/node": "^24",
-    "eslint-plugin-jsdoc": "^63.3.3",
+    "eslint-plugin-jsdoc": "^65.4.5",
     "eslint-plugin-tsdoc": "^0.5.4",
     "husky": "^9.1.7",
-    "oxlint": "^1.88.0",
-    "oxlint-tsgolint": "^7.0.2004",
+    "oxlint": "1.92.0",
+    "oxlint-tsgolint": "7.0.2006",
     "typescript": "7.0.2"
   }
 }
