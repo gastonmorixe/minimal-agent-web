@@ -29,7 +29,9 @@ The root `package.json` is a Bun workspace with `server` and `app`. Root dev too
 
 The server imports core only through the subpaths in core's package `exports` map (`@minimal-agent/core`, the package root, for `createRuntime`/`Session`/`SessionEntry` and the rest of spec 2.3's public surface; `@minimal-agent/core/sdk/events`; `@minimal-agent/core/plugin-api/*`; and so on). Never import `@minimal-agent/core/src/**`, core's source tree, or any other repository by relative path, alias, symlink, or vendored copy. `server/src/architecture/core-boundary.test.ts` enforces this. The app never imports core: it talks to the server over HTTP.
 
-The `@minimal-agent/core` dependency is declared once, by the **repo root** `package.json`, not by `server/package.json`. That is so the umbrella's `bun run link:dev` (`scripts/link-dev.ts` there) can symlink `node_modules/@minimal-agent/core` to a local core checkout for development; a second declaration in `server/` would shadow the link, and a leftover `server/node_modules/@minimal-agent/core` symlink from before that move shadows it too — if `bun install`-ing after a core re-pin ever typechecks against a surprisingly old core, `rm -rf server/node_modules app/node_modules && bun install` from the repo root clears it. `core-boundary.test.ts` checks both: that core is the root's only runtime dependency and that neither `server/` nor `app/` redeclares it.
+The `@minimal-agent/core` dependency is declared once, by the **repo root** `package.json`, not by `server/package.json`. In development the monorepo root workspace `overrides` `@minimal-agent/core` to `workspace:*`, so `node_modules/@minimal-agent/core` is a symlink to the local core checkout. That is why one `bun install` at the monorepo root is enough, and why `bun run link:dev` is no longer part of the dev loop.
+
+A second declaration in `server/` would shadow the link, and a leftover `server/node_modules/@minimal-agent/core` symlink from before that move shadows it too. If `bun install`ing after a core re-pin ever typechecks against a surprisingly old core, `rm -rf server/node_modules app/node_modules && bun install` from the repo root clears it. `core-boundary.test.ts` checks both: that core is the root's only runtime dependency and that neither `server/` nor `app/` redeclares it.
 
 ## Session backend (S53, core-backed)
 
@@ -53,7 +55,7 @@ The backend has two modes. `runtime-backend.ts`'s module doc explains both in fu
 
 ## Dependencies
 
-- The repo root declares one runtime dependency, `@minimal-agent/core` (see "Core boundary rule" above for why it is the root, not `server/`). It installs from a `git+ssh` URL pinned to a full commit SHA or a release tag, never a branch. Keep the `git+ssh` form: Bun turns `git+https://github.com/...` into a GitHub API tarball download that ignores git credentials. To bump core, change the SHA in the root `package.json` and run `bun install`.
+- The repo root declares one runtime dependency, `@minimal-agent/core` (see "Core boundary rule" above for why it is the root, not `server/`). It installs from a `git+ssh` URL pinned to a full commit SHA or a release tag, never a branch. Keep the `git+ssh` form: Bun turns `git+https://github.com/...` into a GitHub API tarball download that ignores git credentials. To bump core, change the SHA in the root `package.json` and run `bun install`. Inside the monorepo root workspace, the `overrides` entry replaces this pin with the local checkout, so the pin only takes effect in a standalone clone or CI.
 - The server produces the chat stream without the AI SDK (D24). `ai` is a server dev dependency: source files may `import type` from it, and tests may use it to check the stream. Server code never loads it at runtime. The boundary test enforces this.
 - The app may use npm dependencies (D25): React, shadcn/ui, the AI SDK UI packages (`@ai-sdk/react`, `ai`).
 - `@playwright/test` is a root dev dependency, pinned to the Chromium build already installed in this environment (see "Tests" below).
@@ -73,7 +75,7 @@ The backend has two modes. `runtime-backend.ts`'s module doc explains both in fu
 
 ```sh
 bun install
-bun run dev             # server + Vite together, with the linked core if link:dev is active (S60)
+bun run dev             # server + Vite together, against the linked or pinned core (S60)
 bun run check            # typecheck, lint, format check, Biome check, unit tests, app build, Playwright e2e
 bun run build            # app -> app/dist
 bun run start            # server on http://127.0.0.1:4317, serves app/dist, RuntimeBackend
@@ -82,7 +84,7 @@ bun run test:e2e         # Playwright only (after `bun run build`)
 
 - `bun run dev` (`scripts/dev.ts`) starts the server (on `HOST`/`PORT`, default 127.0.0.1:4317) and Vite (`bun x vite --port $VITE_PORT --strictPort` in `app/`, default port 5173, proxying `/api` to the server through `API_TARGET`) together, with one token for the run, and prints the Vite URL with that token in the fragment. Either process exiting stops the other.
 - `bun run start` reads `HOST`, `PORT`, `APP_DIR`, `MA_WEB_TOKEN` (random if unset), `MA_WEB_ALLOW_REMOTE`, `MA_WEB_APP_URL` (the URL to print, for when something else serves the app), `MA_WEB_SCRIPTED` (`1` for scripted mode, see "Session backend"), `MA_WEB_SCRIPT_STEP_MS` (scripted mode only: real time between scripted-transport steps, default 15), `MA_WEB_RETRY_CEILING_MS` (retry/quota-wait backoff ceiling, default 300 — core's own default, 60 s, is tuned for a real network call and far too slow for an interactive scripted demo), and `MA_WEB_PERSIST_DIR` (persist sessions to disk with core's real `SessionStore` and durable event log; default memory only — **never** point this at core's own default sessions directory, `~/.minimal-agent/sessions`: web sessions are not CLI sessions). `bootHost()` also reads core's own variables: `MINIMAL_AGENT_HOME`, `MINIMAL_AGENT_DISABLE_PLUGINS`, `MINIMAL_AGENT_ENABLE_PLUGINS`. `pluginRoots()` reads `MINIMAL_AGENT_PLUGIN_SIBLINGS`. `MINIMAL_AGENT_NO_PLUGIN_SYNC` has no effect: the web host never clones plugins. The server binds `127.0.0.1` by default.
-- Works with core linked by the umbrella's `bun run link:dev` (its `scripts/link-dev.ts` symlinks `node_modules/@minimal-agent/core` to a local `minimal-agent-core` checkout): `bun run dev` and `bun run start` just run `bun`/`vite` against whatever is in `node_modules`, so the link needs no special handling here.
+- Works with the local core linked by the monorepo root workspace (`overrides` sets `@minimal-agent/core` to `workspace:*`, so a root `bun install` makes `node_modules/@minimal-agent/core` a symlink to the local checkout). `bun run dev` and `bun run start` just run `bun`/`vite` against whatever is in `node_modules`, so the link needs no special handling here.
 
 ## AI Elements
 
