@@ -39,7 +39,7 @@
  *   web sessions are not CLI sessions, and must not share a directory with
  *   them.
  *
- * Trust: the boot loads plugin code from `<cwd>/.agents/plugins` (the
+ * Trust: the boot loads plugin code from `<cwd>/.agents/minimal-agent/plugins` (the
  * project root in {@link pluginRoots}), where
  * `<cwd>` is the directory the server starts in. Plugin code runs with the
  * full rights of the server process. Start the server only in a trusted
@@ -53,7 +53,7 @@
  * @module main
  */
 
-import { existsSync, statSync } from "node:fs"
+import { existsSync, readdirSync, statSync } from "node:fs"
 import { dirname, join } from "node:path"
 
 import {
@@ -104,26 +104,44 @@ function pluginCheckoutRoots(): string[] {
 }
 
 /**
+ * True when `dir` holds at least one plugin package: a subdir with a
+ * `manifest.json` or a `provider.json`. A subdir can be a symlink, so test
+ * the files, not the dirent type.
+ */
+function hasPluginPackage(dir: string): boolean {
+  try {
+    return readdirSync(dir).some(
+      (name) =>
+        existsSync(join(dir, name, "manifest.json")) ||
+        existsSync(join(dir, name, "provider.json")),
+    )
+  } catch {
+    return false
+  }
+}
+
+/**
  * The plugin roots for `bootHost`. Core knows no default plugin location
  * (S40). The web host computes every root here, in this one place. Each
  * root dir holds plugin package dirs directly:
  *
- * - embedded: `<install dir>/plugins`, then the dev-time checkouts.
- * - user: `<agent home>/plugins`.
- * - home: `$HOME/.agents/plugins`.
- * - project: `<cwd>/.agents/plugins`. Trust: see the module doc.
+ * - embedded: `<install dir>/plugins`, then the dev-time checkouts that
+ *   hold at least one plugin package.
+ * - user: `<agent home>/plugins`, only when no such checkout exists. A dev
+ *   checkout is then the only first-party copy (same rule as the CLI).
+ * - project: `<cwd>/.agents/minimal-agent/plugins`. Trust: see the module doc.
  *
- * Provider plugins load from the embedded roots, then the user roots
- * (core's default `providerRoots`). No `pluginSync`: the web host never
- * clones plugins.
+ * There is no home tier. Provider plugins load from the embedded roots,
+ * then the user roots (core's default `providerRoots`). No `pluginSync`:
+ * the web host never clones plugins.
  */
 function pluginRoots(): HostBootOptions {
+  const checkouts = pluginCheckoutRoots().filter(hasPluginPackage)
   return {
     pluginRoots: {
-      embedded: [join(INSTALL_DIR, "plugins"), ...pluginCheckoutRoots()],
-      user: [join(resolveAgentHome(process.env), "plugins")],
-      home: process.env.HOME ? [join(process.env.HOME, ".agents", "plugins")] : [],
-      project: [join(process.cwd(), ".agents", "plugins")],
+      embedded: [join(INSTALL_DIR, "plugins"), ...checkouts],
+      user: checkouts.length > 0 ? [] : [join(resolveAgentHome(process.env), "plugins")],
+      project: [join(process.cwd(), ".agents", "minimal-agent", "plugins")],
     },
   }
 }
@@ -207,7 +225,7 @@ appUrl.hash = `token=${token}`
 console.log(`minimal-agent web: ${backend.transport.description}`)
 if (!scripted) {
   console.log(
-    `minimal-agent web: plugins load from ${join(process.cwd(), ".agents", "plugins")} ` +
+    `minimal-agent web: plugins load from ${join(process.cwd(), ".agents", "minimal-agent", "plugins")} ` +
       "(the start directory). Start the server only in a trusted directory.",
   )
 }
