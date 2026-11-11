@@ -185,8 +185,8 @@ describe("RuntimeBackend, loader diagnostics", () => {
     const backend = new RuntimeBackend({ host: spyHost, retryCeilingMs: 5 })
     const flags = globalThis as Record<string, unknown>
     try {
-      const a = await backend.createSession({})
-      const b = await backend.createSession({})
+      const a = await backend.createSession({ model: stub.modelId })
+      const b = await backend.createSession({ model: stub.modelId })
       flags[ARM_FLAG] = true
       const turnA = await backend.startTurn(a.id, { text: "read the note" })
       const doneA = drain(turnA.events)
