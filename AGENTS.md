@@ -59,7 +59,7 @@ The backend has two modes. `runtime-backend.ts`'s module doc explains both in fu
 - The server produces the chat stream without the AI SDK (D24). `ai` is a server dev dependency: source files may `import type` from it, and tests may use it to check the stream. Server code never loads it at runtime. The boundary test enforces this.
 - The app may use npm dependencies (D25): React, shadcn/ui, the AI SDK UI packages (`@ai-sdk/react`, `ai`).
 - `@playwright/test` is a root dev dependency, pinned to the Chromium build already installed in this environment (see "Tests" below).
-- CI: all repos are private, and the Actions token reads only this repo. CI clones core with a read-only deploy key on minimal-agent-core, whose private half is the `CORE_DEPLOY_KEY` secret here. The workflow pins GitHub's published SSH host key and routes Bun's `https://git@github.com/` clone to SSH. Until the secret exists, CI fails at the "Allow reading private core" step.
+- CI: all repos are private, and the Actions token reads only this repo, so it cannot install core. This repo's `ci.yml` runs commitlint only (it installs just the pinned `@commitlint/*` packages). The full gate (`bun run check`, build, Playwright e2e) runs in the umbrella monorepo CI against this repo's pin.
 
 ## Security (spec 4.5, S57)
 
