@@ -72,6 +72,7 @@ import type { BootedHost, ModelRow } from "@minimal-agent/core/host-kit/host-boo
 import { createLifecyclePort } from "@minimal-agent/core/host-kit/lifecycle-port-adapter"
 import type { AgentEvent } from "@minimal-agent/core/sdk/events"
 
+import { authErrorText } from "./auth-error-text.ts"
 import {
   BackendError,
   type CreateSessionInput,
@@ -270,9 +271,9 @@ async function providerParts(
   try {
     auth = await host.resolveAuth(row.id, row.providerId, credentialName)
   } catch (error) {
-    // The core message names the provider and the login command. It holds no secret.
-    const reason = error instanceof Error ? error.message : String(error)
-    throw new BackendError("auth_unavailable", reason)
+    // Core throws a typed error with no text. The web text names the provider
+    // and the login command. It holds no secret.
+    throw new BackendError("auth_unavailable", authErrorText(error))
   }
   return {
     model: row.id,
