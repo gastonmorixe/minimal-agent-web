@@ -9,6 +9,7 @@ import {
   type ChatStreamState,
   INITIAL_CHAT_STREAM_STATE,
   mapChatStreamInput,
+  retryBoundaryText,
   toFinishReason,
 } from "./adapter.ts"
 import type { UiMessageChunk } from "./chunks.ts"
@@ -128,6 +129,26 @@ describe("mapChatStreamInput", () => {
       { type: "text-start", id: "3:text" },
       { type: "text-delta", id: "3:text", delta: "Wrapping up." },
     ])
+  })
+
+  test("maps retry-boundary to a text delta with the old stall marker text (S14.4)", () => {
+    const chunks = mapAll(
+      events(
+        { type: "turn_started", turn: 1 },
+        { type: "text_delta", id: "1:text", text: "partial" },
+        { type: "retry-boundary", id: "1:text", attempt: 2 },
+        { type: "text_delta", id: "1:text", text: "again" },
+      ),
+    )
+    expect(chunks).toEqual([
+      { type: "start" },
+      { type: "start-step" },
+      { type: "text-start", id: "1:text" },
+      { type: "text-delta", id: "1:text", delta: "partial" },
+      { type: "text-delta", id: "1:text", delta: "\n↳ stream stalled — retrying (attempt 2)…\n" },
+      { type: "text-delta", id: "1:text", delta: "again" },
+    ])
+    expect(retryBoundaryText(3)).toBe("\n↳ stream stalled — retrying (attempt 3)…\n")
   })
 
   test("sends nothing for block_started and block_stopped", () => {
