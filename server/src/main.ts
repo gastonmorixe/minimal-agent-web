@@ -65,6 +65,7 @@ import { resolveAgentHome } from "@minimal-agent/core/plugin-api/utils/agent-pat
 
 import { RuntimeBackend } from "./backend/runtime-backend.ts"
 import { createScriptedTransport } from "./backend/transport/scripted-transport.ts"
+import { formatBootDiagnostic } from "./boot-diagnostic.ts"
 import { BindRefusedError, checkBindHost, createToken } from "./security/security.ts"
 import { startServer } from "./server.ts"
 
@@ -163,7 +164,7 @@ async function bootOrExit(): Promise<BootedHost> {
   } catch (error) {
     fail(`boot failed: ${error instanceof Error ? error.message : String(error)}`, 2)
   }
-  for (const d of host.diagnostics) console.error(`minimal-agent web: boot ${d.kind}: ${d.message}`)
+  for (const d of host.diagnostics) console.error(formatBootDiagnostic(d))
   const hint =
     "Install a provider plugin in <agent home>/plugins (see core docs/host-boot.md), " +
     "or set MA_WEB_SCRIPTED=1 for the scripted transport."
