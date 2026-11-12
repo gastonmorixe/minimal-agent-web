@@ -20,3 +20,6 @@ PROGRESS.md
 .DS_Store
 *.swp
 *.swo
+
+# embedded plugin tier, filled by scripts/bundle-plugins.ts
+/plugins/

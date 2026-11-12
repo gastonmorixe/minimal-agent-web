@@ -20,7 +20,7 @@
   "scripts": {
     "dev": "bun run scripts/dev.ts",
     "start": "bun run --cwd server start",
-    "build": "bun run --cwd app build",
+    "build": "bun run scripts/bundle-plugins.ts && bun run --cwd app build",
     "test": "bun test",
     "test:e2e": "([ -n \"$CI\" ] && playwright install chromium || true) && playwright test",
     "typecheck": "bun run --cwd server typecheck && bun run --cwd app typecheck && tsc --noEmit -p e2e/tsconfig.json",
