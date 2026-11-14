@@ -14,6 +14,7 @@
  * | `turn_started`            | `start-step`                                       |
  * | `turn_completed`          | `data-usage`, then `finish-step`                   |
  * | `text_delta`              | `text-start` (first delta), `text-delta`           |
+ * | `retry-boundary`          | `text-delta` with the stall marker text            |
  * | `thinking_delta`          | `reasoning-start` (first delta), `reasoning-delta` |
  * | `item_completed` text     | `text-end`                                         |
  * | `item_completed` thinking | `reasoning-end`                                    |
@@ -173,14 +174,12 @@ function mapAgentEvent(draft: Draft, event: AgentEvent, chunks: UiMessageChunk[]
       draft.stepOpen = true
       return
     case "text_delta":
-      openStep(draft, chunks)
-      if (draft.openText !== event.id) {
-        closeText(draft, chunks)
-        chunks.push({ type: "text-start", id: event.id })
-        draft.openText = event.id
-      }
-      chunks.push({ type: "text-delta", id: event.id, delta: event.text })
-      draft.streamedText = true
+      textDelta(draft, chunks, event.id, event.text)
+      return
+    case "retry-boundary":
+      // S14.4: core sends the boundary as data. The text part gets the marker
+      // text that core used to stream, so the browser shows the same bytes.
+      textDelta(draft, chunks, event.id, retryBoundaryText(event.attempt))
       return
     case "thinking_delta":
       openStep(draft, chunks)
@@ -289,6 +288,23 @@ function mapAgentEvent(draft: Draft, event: AgentEvent, chunks: UiMessageChunk[]
     default:
       unmapped(event)
   }
+}
+
+/** Send one text delta, and open the text part for `id` first if it is not open. */
+function textDelta(draft: Draft, chunks: UiMessageChunk[], id: string, text: string): void {
+  openStep(draft, chunks)
+  if (draft.openText !== id) {
+    closeText(draft, chunks)
+    chunks.push({ type: "text-start", id })
+    draft.openText = id
+  }
+  chunks.push({ type: "text-delta", id, delta: text })
+  draft.streamedText = true
+}
+
+/** The text of a `retry-boundary` event: the stall marker core used to stream. */
+export function retryBoundaryText(attempt: number): string {
+  return `\n↳ stream stalled — retrying (attempt ${attempt})…\n`
 }
 
 type ItemCompleted = Extract<AgentEvent, { type: "item_completed" }>
