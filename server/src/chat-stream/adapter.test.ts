@@ -8,6 +8,7 @@ import {
   type ChatStreamInput,
   type ChatStreamState,
   INITIAL_CHAT_STREAM_STATE,
+  lifecycleDeniedText,
   mapChatStreamInput,
   retryBoundaryText,
   toFinishReason,
@@ -199,6 +200,48 @@ describe("mapChatStreamInput", () => {
         dynamic: true,
       },
     ])
+  })
+
+  test("renders a LifecycleDeniedError with no reason (message '') as a non-empty line", () => {
+    const chunks = mapAll(
+      events({
+        type: "error",
+        message: "",
+        error: { kind: "LifecycleDeniedError", fields: { hook: "tool.didBatch" } },
+      }),
+    )
+    expect(chunks).toEqual([
+      { type: "start" },
+      { type: "error", errorText: "The tool.didBatch hook denied the operation." },
+    ])
+  })
+
+  test("renders the LifecycleDeniedError fields: plugin, tool, failure, reason", () => {
+    expect(
+      lifecycleDeniedText({
+        hook: "message.willSend",
+        pluginId: "acme",
+        tool: "Bash",
+        reason: "secrets",
+      }),
+    ).toBe(
+      "The message.willSend hook denied the operation (plugin acme) for the tool Bash: secrets",
+    )
+    expect(
+      lifecycleDeniedText({
+        hook: "compact.willRun",
+        failure: { label: "user:gate", detail: "timeout" },
+      }),
+    ).toBe(
+      'The compact.willRun hook denied the operation. The approval hook "user:gate" failed (timeout).',
+    )
+  })
+
+  test("an error event of another kind with message '' shows the kind", () => {
+    const chunks = mapAll(
+      events({ type: "error", message: "", error: { kind: "SomeNewError", fields: {} } }),
+    )
+    expect(chunks).toEqual([{ type: "start" }, { type: "error", errorText: "SomeNewError" }])
   })
 
   test("keeps the error message alone when there is no hint", () => {
