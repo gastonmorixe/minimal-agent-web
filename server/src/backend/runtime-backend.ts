@@ -237,7 +237,7 @@ function findRow(host: BootedHost, modelId: string, providerId?: string): ModelR
  * window. `providerId` scopes the row lookup. `credentialName` selects one
  * stored credential of the provider.
  */
-async function providerParts(
+export async function providerParts(
   host: BootedHost,
   modelId: string,
   providerId?: string,
@@ -287,6 +287,9 @@ async function providerParts(
       // One executor per session: it carries the model context of this session.
       toolExecutor: host.toolExecutorFor(row.id),
       lifecycle: createLifecyclePort(host.loader.hooks()),
+      // B1: the runtime has no loader, so pass the loader's text providers.
+      syntheticTextProviders: host.loader.syntheticTextProviders(),
+      toolTextProviders: host.loader.toolTextProviders(),
     },
   }
 }
