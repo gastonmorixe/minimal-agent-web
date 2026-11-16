@@ -9,6 +9,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 
 import { type BootedHost, bootHost } from "@minimal-agent/core/host-kit/host-boot"
 import type { SyntheticTextProvider } from "@minimal-agent/core/plugin-api/types/synthetic-text"
+import type { ToolTextProvider } from "@minimal-agent/core/plugin-api/types/tool-text"
 
 import { providerParts } from "./runtime-backend.ts"
 import {
@@ -38,15 +39,13 @@ describe("providerParts text providers (B1)", () => {
       kinds: ["continue.max_tokens"],
       text: () => "X-web",
     }
-    const tool = { tools: ["Read"], tool: () => undefined }
-    const loader = Object.create(host.loader) as BootedHost["loader"]
+    const tool: ToolTextProvider = { tools: ["Read"], tool: () => undefined }
+    const loader: BootedHost["loader"] = Object.create(host.loader)
     loader.syntheticTextProviders = () => [synthetic]
-    loader.toolTextProviders = () => [tool] as never
+    loader.toolTextProviders = () => [tool]
     const parts = await providerParts({ ...host, loader }, stub.modelId)
     expect(parts.open.syntheticTextProviders).toEqual([synthetic])
-    expect(parts.open.syntheticTextProviders?.[0]?.text("continue.max_tokens", {} as never)).toBe(
-      "X-web",
-    )
-    expect(parts.open.toolTextProviders).toEqual([tool] as never)
+    expect(parts.open.syntheticTextProviders?.[0]?.text("continue.max_tokens", {})).toBe("X-web")
+    expect(parts.open.toolTextProviders).toEqual([tool])
   })
 })
