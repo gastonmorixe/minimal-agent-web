@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
 
 import { RuntimeBackend } from "./backend/runtime-backend.ts"
-import { writeStubProviderHome } from "./backend/stub-provider.fixture.ts"
+import { writeStubProviderHome, writeTextStubPlugin } from "./backend/stub-provider.fixture.ts"
 import { BindRefusedError } from "./security/security.ts"
 import { startServer } from "./server.ts"
 
@@ -268,12 +268,25 @@ describe("main.ts", () => {
   test("exits 2 with a clear message when no provider resolves", async () => {
     const home = join(root, "empty-home")
     mkdirSync(join(home, "plugins"), { recursive: true })
+    // The text plugins are there, so the boot fails on the provider only.
+    writeTextStubPlugin(home)
     const child = runMain(hermeticBootEnv(home))
     expect(await child.exited).toBe(2)
     const err = await new Response(child.stderr).text()
     expect(err).toContain("minimal-agent web: no provider plugin resolved")
     expect(err).toContain("MA_WEB_SCRIPTED=1")
     expect(await new Response(child.stdout).text()).not.toContain("open ")
+  })
+
+  test("exits 2 and names the missing text contracts with no text plugins", async () => {
+    const home = join(root, "no-text-home")
+    mkdirSync(join(home, "plugins"), { recursive: true })
+    const child = runMain(hermeticBootEnv(home))
+    expect(await child.exited).toBe(2)
+    const err = await new Response(child.stderr).text()
+    expect(err).toContain("minimal-agent web: boot failed: required plugin contracts are not met")
+    expect(err).toContain("text.tools")
+    expect(err).toContain("synthetic:mode.change")
   })
 
   test("prints boot diagnostics to stderr", async () => {
@@ -287,6 +300,7 @@ describe("main.ts", () => {
     writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { "left-pad": "1" } }))
     // No import of the package: Bun could try to auto-install it.
     writeFileSync(join(dir, "i.ts"), "export const providerPlugin = {}\n")
+    writeTextStubPlugin(home)
     const child = runMain(hermeticBootEnv(home))
     expect(await child.exited).toBe(2)
     expect(await new Response(child.stderr).text()).toContain("boot plugin-deps-missing")
@@ -294,6 +308,7 @@ describe("main.ts", () => {
 
   test("boots a provider plugin and serves its models", async () => {
     const stub = writeStubProviderHome("mainstub")
+    writeTextStubPlugin(stub.home)
     const token = "main-test-token-0123456789-abcdefghijklmnop"
     const child = runMain({ ...hermeticBootEnv(stub.home), MA_WEB_TOKEN: token })
     try {

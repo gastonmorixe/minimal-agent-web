@@ -63,6 +63,7 @@ import {
 } from "@minimal-agent/core/host-kit/host-boot"
 import { resolveAgentHome } from "@minimal-agent/core/plugin-api/utils/agent-paths"
 
+import { bootErrorText, WEB_BOOT_CONTRACTS } from "./backend/boot-error-text.ts"
 import { RuntimeBackend } from "./backend/runtime-backend.ts"
 import { createScriptedTransport } from "./backend/transport/scripted-transport.ts"
 import { formatBootDiagnostic } from "./boot-diagnostic.ts"
@@ -160,9 +161,9 @@ function fail(message: string, code: number): never {
 async function bootOrExit(): Promise<BootedHost> {
   let host: BootedHost
   try {
-    host = await bootHost(pluginRoots())
+    host = await bootHost({ ...pluginRoots(), ...WEB_BOOT_CONTRACTS })
   } catch (error) {
-    fail(`boot failed: ${error instanceof Error ? error.message : String(error)}`, 2)
+    fail(`boot failed: ${bootErrorText(error)}`, 2)
   }
   for (const d of host.diagnostics) console.error(formatBootDiagnostic(d))
   const hint =

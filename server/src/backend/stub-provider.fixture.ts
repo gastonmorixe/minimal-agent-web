@@ -21,7 +21,7 @@
  * @module backend/stub-provider.fixture
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 
@@ -194,4 +194,17 @@ export const providerPlugin = {
   },
 }
 `
+}
+
+/** The stub text plugin package dir (every required text contract, short markers). */
+export const TEXT_STUB_PLUGIN_DIR = join(import.meta.dir, "fixtures", "ma-text-stub-fixture-plugin")
+
+/**
+ * Copy the stub text plugin into `<home>/plugins`, so a boot with
+ * `requiredContracts: TEXT_CONTRACTS` (the web main) passes the contract check.
+ */
+export function writeTextStubPlugin(home: string): void {
+  cpSync(TEXT_STUB_PLUGIN_DIR, join(home, "plugins", "ma-text-stub-fixture-plugin"), {
+    recursive: true,
+  })
 }
