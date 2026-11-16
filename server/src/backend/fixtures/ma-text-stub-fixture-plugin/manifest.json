@@ -51,6 +51,8 @@
         "tool_result.lock_timeout",
         "tool_result.lock_failed",
         "tool_result.policy_rewrite_note",
+        "tool_result.non_tool_result",
+        "tool_result.invalid_input",
         "user_media.rejected",
         "user_media.unavailable",
         "compact.summary_system",
