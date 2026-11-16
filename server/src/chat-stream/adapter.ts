@@ -482,6 +482,10 @@ function optText(v: unknown): string | undefined {
  * denied the operation. It names the hook, the plugin id, the tool, the
  * failed approval hook, and the reason the hook gave. With no reason, it
  * gives no reason.
+ *
+ * Same deny text in 3 other places:
+ * cli src/startup/core-text.ts (lifecycleDeniedText),
+ * plugins ma-acp-plugin/error-text.ts, plugins ma-sub-agents-plugin/lib/error-text.ts.
  */
 export function lifecycleDeniedText(fields: Readonly<Record<string, unknown>>): string {
   const hook = optText(fields.hook) ?? "lifecycle"
