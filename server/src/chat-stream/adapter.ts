@@ -282,7 +282,7 @@ function mapAgentEvent(draft: Draft, event: AgentEvent, chunks: UiMessageChunk[]
     case "error":
       closeText(draft, chunks)
       closeReasoning(draft, chunks)
-      chunks.push({ type: "error", errorText: errorText(event.message, event.hint) })
+      chunks.push({ type: "error", errorText: errorText(errorEventMessage(event), event.hint) })
       draft.errored = true
       return
     default:
@@ -469,6 +469,51 @@ function outcomeFinishReason(draft: Draft): UiFinishReason | undefined {
       unmapped(draft.outcome)
       return "other"
   }
+}
+
+type ErrorEvent = Extract<AgentEvent, { type: "error" }>
+
+function optText(v: unknown): string | undefined {
+  return typeof v === "string" && v.trim() !== "" ? v.trim() : undefined
+}
+
+/**
+ * Web text of a `LifecycleDeniedError` (fields only): a lifecycle hook
+ * denied the operation. It names the hook, the plugin id, the tool, the
+ * failed approval hook, and the reason the hook gave. With no reason, it
+ * gives no reason.
+ */
+export function lifecycleDeniedText(fields: Readonly<Record<string, unknown>>): string {
+  const hook = optText(fields.hook) ?? "lifecycle"
+  const pluginId = optText(fields.pluginId)
+  const tool = optText(fields.tool)
+  const reason = optText(fields.reason)
+  let text = `The ${hook} hook denied the operation`
+  if (pluginId !== undefined) text += ` (plugin ${pluginId})`
+  if (tool !== undefined) text += ` for the tool ${tool}`
+  const failure = fields.failure
+  if (failure !== null && typeof failure === "object" && !Array.isArray(failure)) {
+    const label = optText((failure as { label?: unknown }).label)
+    const detail = optText((failure as { detail?: unknown }).detail)
+    text +=
+      label !== undefined ? `. The approval hook "${label}" failed` : ". The approval hook failed"
+    if (detail !== undefined) text += ` (${detail})`
+  }
+  return reason !== undefined ? `${text}: ${reason}` : `${text}.`
+}
+
+/**
+ * The text of an `error` event. Core sends `error` (kind and fields) and an
+ * empty `message` for a CoreError. A known kind gets its web text. Another
+ * kind with an empty message gives the kind, so the text is never empty.
+ */
+export function errorEventMessage(event: ErrorEvent): string {
+  const err = event.error
+  if (err !== undefined) {
+    if (err.kind === "LifecycleDeniedError") return lifecycleDeniedText(err.fields)
+    if (event.message === "") return err.kind
+  }
+  return event.message
 }
 
 function errorText(message: string, hint: string | undefined): string {
