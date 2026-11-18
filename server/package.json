@@ -11,6 +11,6 @@
   },
   "devDependencies": {
     "ai": "7.0.159",
-    "bun-types": "^1.4.3"
+    "bun-types": "^1.4.4"
   }
 }
