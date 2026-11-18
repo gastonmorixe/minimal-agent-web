@@ -32,6 +32,9 @@
  *   transport steps (default 15).
  * - `MA_WEB_RETRY_CEILING_MS`: retry/quota-wait backoff ceiling, in ms
  *   (default 300 — see `backend/runtime-backend.ts`'s `DEFAULT_RETRY_CEILING_MS`).
+ * - `MINIMAL_AGENT_BIN`: the command that starts another agent process (the
+ *   sub-agents plugin). Published at start when unset: the sibling CLI
+ *   checkout, so a worker is a CLI process, not a second web server.
  * - `MA_WEB_PERSIST_DIR`: persist sessions here (core's real `SessionStore` +
  *   durable event log, so a session outlives a server restart). Default:
  *   unset, memory only — a session is gone once the process exits. Never
@@ -65,6 +68,7 @@ import { resolveAgentHome } from "@minimal-agent/core/plugin-api/utils/agent-pat
 
 import packageJson from "../package.json" with { type: "json" }
 
+import { publishAgentBin } from "./backend/agent-bin.ts"
 import { bootErrorText, WEB_BOOT_CONTRACTS } from "./backend/boot-error-text.ts"
 import { RuntimeBackend } from "./backend/runtime-backend.ts"
 import { createScriptedTransport } from "./backend/transport/scripted-transport.ts"
@@ -194,6 +198,8 @@ try {
   )
 }
 
+// A worker that a plugin starts must be a CLI process, not this server.
+publishAgentBin({ installDir: INSTALL_DIR })
 const scripted = process.env.MA_WEB_SCRIPTED === "1"
 const persistDir = process.env.MA_WEB_PERSIST_DIR
 const retryCeilingMs = numberFromEnv("MA_WEB_RETRY_CEILING_MS")
