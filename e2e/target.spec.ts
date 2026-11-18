@@ -108,7 +108,7 @@ test("a model with no effort levels has no effort select", async ({ page, reques
 test("the scripted server shows no target control", async ({ page }) => {
   await page.goto(`/#token=${token()}`)
   await page.getByTestId("new-session").click()
-  await expect(page).toHaveURL(/\/sessions\/session-\d+$/u)
+  await expect(page).toHaveURL(/\/sessions\/[0-9a-f-]{36}$/u)
   await expect(page.getByTestId("session-title")).toBeVisible()
   await expect(page.getByTestId("target-control")).toHaveCount(0)
 })

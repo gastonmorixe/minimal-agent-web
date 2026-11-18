@@ -86,6 +86,8 @@ export interface StubProviderOptions {
   anonymousAuth?: boolean
   /** Register the three models for the tests of a target change. Default `false`. */
   targetModels?: boolean
+  /** The tool that the first answer calls, with no input. Default: `Read` of {@link StubProviderHome.readPath}. */
+  toolName?: string
 }
 
 /**
@@ -150,6 +152,7 @@ export function writeStubProviderHome(
       requestLog,
       targetModels:
         options.targetModels === true ? { plainModelId, limitedModelId, noEffortModelId } : null,
+      toolName: options.toolName ?? null,
     }),
   )
   return {
@@ -218,6 +221,7 @@ interface StubEntryInput {
   anonymousAuth: StubProviderHome["anonymousAuth"]
   requestLog: string
   targetModels: { plainModelId: string; limitedModelId: string; noEffortModelId: string } | null
+  toolName: string | null
 }
 
 /** Source of the stub provider entry file. */
@@ -281,8 +285,8 @@ async function* run(req, _model, ctx) {
     yield { type: "text_stop", index: 0 }
     yield { type: "message_delta", stopReason: "end_turn", usage }
   } else {
-    const input = { file_path: ${q(readPath)} }
-    yield { type: "tool_use_start", index: 0, id: "toolu_stub_1", name: "Read" }
+    const input = ${input.toolName === null ? `{ file_path: ${q(readPath)} }` : "{}"}
+    yield { type: "tool_use_start", index: 0, id: "toolu_stub_1", name: ${q(input.toolName ?? "Read")} }
     yield { type: "tool_use_input_delta", index: 0, partialJson: JSON.stringify(input) }
     yield { type: "tool_use_stop", index: 0, input }
     yield { type: "message_delta", stopReason: "tool_use", usage }

@@ -69,14 +69,21 @@
  * session follows the model through the core's own target-change event
  * (`backend/live-tool-executor.ts`).
  *
+ * The plugins see the session too: each session opens with a core plugin
+ * scope (`pluginScope`), so a plugin tool of a run reads the id, live target,
+ * model info and token counters of its own session (`ctx.agent`, `ctx.env`,
+ * `ctx.queryTarget`, `ctx.queryModelInfo`, `ctx.host.sessionInfo`), and the
+ * net-dbg folder of a session is named by its id.
+ *
  * Not done: a sub-agent that a web session starts does not get the target
- * of that session. The sub-agents plugin reads the target of the process
- * (the env and the loader), which the web host does not set. This gap is
- * older than `setTarget`.
+ * of that session. The sub-agents plugin spawns a child process from the
+ * process env, which the web host does not set. This gap is older than
+ * `setTarget`.
  *
  * @module backend/runtime-backend
  */
 
+import { randomUUID } from "node:crypto"
 import { resolve } from "node:path"
 
 import {
@@ -138,6 +145,11 @@ export interface RuntimeBackendOptions {
   retryCeilingMs?: number
   /** Clock for entry timestamps. Default `Date.now`. */
   now?: () => number
+  /**
+   * The server version for the plugin agent identity (`ctx.agent.version`)
+   * of each session. Default: `""`.
+   */
+  version?: string
 }
 
 /** Scripted mode only. Placeholder credentials: the scripted transport never reads them. */
@@ -337,7 +349,7 @@ export class RuntimeBackend implements SessionBackend {
   private readonly retryCeilingMs: number | undefined
   private readonly now: () => number
   private readonly sessions = new Map<string, SessionState>()
-  private created = 0
+  private readonly version: string
 
   /**
    * Create the backend. It starts with no sessions.
@@ -356,6 +368,7 @@ export class RuntimeBackend implements SessionBackend {
     this.cwd = process.cwd()
     this.retryCeilingMs = options.retryCeilingMs ?? DEFAULT_RETRY_CEILING_MS
     this.now = options.now ?? Date.now
+    this.version = options.version ?? ""
   }
 
   /** What {@link SessionBackend.models} returns: model rows plus stored credentials. */
@@ -413,11 +426,17 @@ export class RuntimeBackend implements SessionBackend {
             input.credentialName,
             input.effort,
           )
-    this.created++
-    const id = `session-${this.created}`
+    // A UUID: the same id names the session in the API, its transcript, its
+    // net-dbg folder and the plugin identity. It never repeats across a
+    // restart, so a persisted session is never reused by a new one.
+    const id = randomUUID()
     const session = this.runtime.openSession({
       id,
       ...parts.open,
+      // Many sessions share this process and its plugin loader: each run
+      // gives the plugins the identity, target and token counters of THIS
+      // session, not the boot values of the process (core session scope).
+      pluginScope: { version: this.version },
       // The web UI answers asks through `session.answer` (`answer()` below).
       askUserFallback: "registry",
       askDeadlineMs: ASK_DEADLINE_MS,
