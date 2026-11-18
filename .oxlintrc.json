@@ -3,6 +3,10 @@
   "plugins": ["typescript", "oxc", "import", "react"],
   "jsPlugins": [
     {
+      "name": "ma",
+      "specifier": "./node_modules/@minimal-agent/core/scripts/lint/no-direct-stdio.mjs"
+    },
+    {
       "name": "jsdoc-js",
       "specifier": "eslint-plugin-jsdoc"
     },
@@ -21,6 +25,9 @@
     "reportUnusedDisableDirectives": "warn"
   },
   "rules": {
+    // No module writes to the process stdout or stderr on its own. Product output goes
+    // through an injected writer, diagnostics through the diagnostic bus or the plugin logger.
+    "ma/no-direct-stdio": "error",
     "typescript/no-floating-promises": "error",
     "no-await-in-loop": "off",
     "tsdoc/syntax": "error",
@@ -61,6 +68,22 @@
     ]
   },
   "overrides": [
+    {
+      // ma/no-direct-stdio allowlist. Keep it equal to server/src/architecture/no-direct-stdio.baseline.json
+      // (a test checks that): `exempt` globs first (tests, dev tooling), then one
+      // entry per file that may still write directly. The count per file can only go down.
+      "files": [
+        "**/*.test.ts",
+        "**/*.test.tsx",
+        "scripts/**",
+        "e2e/**",
+        "playwright.config.ts",
+        "app/**",
+        "server/src/api/internal-error.ts",
+        "server/src/main.ts"
+      ],
+      "rules": { "ma/no-direct-stdio": "off" }
+    },
     {
       "files": ["**/*.test.ts", "**/*.test.tsx"],
       "rules": {
