@@ -4,7 +4,8 @@
  * `RuntimeBackend` implements {@link SessionBackend} on one `createRuntime`
  * instance (core S47/S48): `createSession` → `runtime.openSession`,
  * `startTurn` → `session.run`, `subscribe` → `session.subscribe`, `answer` →
- * `session.answer`, `abort` → `session.abort`. It replaces the S52
+ * `session.answer`, `abort` → `session.abort`, `setTarget` →
+ * `AgentCore.switchTarget` of that one session. It replaces the S52
  * `FakeBackend` / `core-mirror/` scaffolding: the event and `SessionEntry`
  * shapes are now core's real, exported ones
  * (`@minimal-agent/core/sdk/events`, `@minimal-agent/core`), not a
@@ -52,8 +53,26 @@
  * app shows the scripted banner only in scripted mode.
  *
  * The web never resumes a session: `createSession` always opens a new
- * session, `providerId` and `credentialName` live only on that open, and
- * a restart drops all in-memory sessions.
+ * session, and a restart drops all in-memory sessions.
+ *
+ * ## The target of a session
+ *
+ * A session starts on the credential, provider, model and effort of its
+ * `createSession` call. `setTarget` changes them at any time, also while a
+ * turn runs or waits for a retry or a quota reset (`backend/target.ts` has
+ * the checks). The summary reads the live values from the session's core.
+ *
+ * One server process has many sessions and one plugin loader. So a target
+ * change touches only the `AgentCore` of its session. It writes no
+ * `process.env` value and sets no field of the loader: both are for the
+ * process, and an other session would read them. The tool executor of the
+ * session follows the model through the core's own target-change event
+ * (`backend/live-tool-executor.ts`).
+ *
+ * Not done: a sub-agent that a web session starts does not get the target
+ * of that session. The sub-agents plugin reads the target of the process
+ * (the env and the loader), which the web host does not set. This gap is
+ * older than `setTarget`.
  *
  * @module backend/runtime-backend
  */
@@ -68,7 +87,7 @@ import {
   type SessionEntry,
   type SubscribeOptions,
 } from "@minimal-agent/core"
-import type { BootedHost, ModelRow } from "@minimal-agent/core/host-kit/host-boot"
+import type { BootedHost } from "@minimal-agent/core/host-kit/host-boot"
 import { createLifecyclePort } from "@minimal-agent/core/host-kit/lifecycle-port-adapter"
 import type { AgentEvent } from "@minimal-agent/core/sdk/events"
 
@@ -81,10 +100,13 @@ import {
   type SessionBackend,
   type SessionStatus,
   type SessionSummary,
+  type SetTargetInput,
   type TransportInfo,
   type TurnHandle,
 } from "./backend.ts"
 import { assistantMessageId } from "./history.ts"
+import { LiveToolExecutor } from "./live-tool-executor.ts"
+import { checkEffort, credentialNamesOf, findRow, targetSelection } from "./target.ts"
 import { createScriptedTransport, type ScriptedTransport } from "./transport/scripted-transport.ts"
 
 /** Options for {@link RuntimeBackend}. */
@@ -143,6 +165,8 @@ interface ModeSessionParts {
   model: string
   contextWindow: number
   open: Omit<OpenSessionOptions, "id" | "retry" | "persist">
+  /** Provider mode: the tool executor of the session, which follows its live model. */
+  tools?: LiveToolExecutor
 }
 
 const TITLE_LENGTH = 60
@@ -155,11 +179,14 @@ const TITLE_LENGTH = 60
 export const ASK_DEADLINE_MS = 5 * 60_000
 
 interface SessionState {
-  summary: Omit<SessionSummary, "status" | "updatedAt" | "title" | "runs">
+  /** The fixed part of the summary. The live target comes from the core. */
+  summary: Pick<SessionSummary, "id" | "cwd" | "mode" | "contextWindow" | "createdAt">
   title: string | null
   runs: number
   status: SessionStatus
   session: Session
+  /** The target changes of this session run one after the other. */
+  targetQueue: Promise<unknown>
 }
 
 function titleFrom(text: string): string {
@@ -226,22 +253,18 @@ function providerTransport(host: BootedHost): TransportInfo {
   }
 }
 
-/** Find a booted model row by id, scoped to one provider when set. */
-function findRow(host: BootedHost, modelId: string, providerId?: string): ModelRow | undefined {
-  if (providerId === undefined) return host.models.find((m) => m.id === modelId)
-  return host.models.find((m) => m.id === modelId && m.providerId === providerId)
-}
-
 /**
  * Provider mode: real auth, host tools, no `sendFn`, and the row's context
  * window. `providerId` scopes the row lookup. `credentialName` selects one
- * stored credential of the provider.
+ * stored credential of the provider. `effort` must be a level of the model:
+ * it is checked here, and the caller sets it on the core after the open.
  */
 export async function providerParts(
   host: BootedHost,
   modelId: string,
   providerId?: string,
   credentialName?: string,
+  effort?: string,
 ): Promise<ModeSessionParts> {
   if (credentialName !== undefined && providerId === undefined) {
     throw new BackendError(
@@ -267,6 +290,7 @@ export async function providerParts(
   if (row === undefined) {
     throw new BackendError("unknown_model", `no booted provider registers model "${modelId}"`)
   }
+  if (effort !== undefined) checkEffort(row, effort)
   let auth: Awaited<ReturnType<BootedHost["resolveAuth"]>>
   try {
     auth = await host.resolveAuth(row.id, row.providerId, credentialName)
@@ -275,17 +299,22 @@ export async function providerParts(
     // and the login command. It holds no secret.
     throw new BackendError("auth_unavailable", authErrorText(error))
   }
+  // One executor per session: it carries the model context of this session,
+  // and it follows the model after a target change.
+  const tools = new LiveToolExecutor(host, row.id)
   return {
     model: row.id,
     contextWindow: row.contextWindow,
+    tools,
     open: {
       model: row.id,
       providerId: row.providerId,
       ...(credentialName !== undefined ? { credentialName } : {}),
+      // The core checks a credential name of a target change against the store too.
+      credentialNames: (provider) => credentialNamesOf(host, provider),
       auth,
       toolRegistry: host.toolRegistry,
-      // One executor per session: it carries the model context of this session.
-      toolExecutor: host.toolExecutorFor(row.id),
+      toolExecutor: tools,
       lifecycle: createLifecyclePort(host.loader.hooks()),
       // B1: the runtime has no loader, so pass the loader's text providers.
       syntheticTextProviders: host.loader.syntheticTextProviders(),
@@ -377,7 +406,13 @@ export class RuntimeBackend implements SessionBackend {
     const parts =
       this.host === undefined
         ? this.scriptedParts(input)
-        : await providerParts(this.host, input.model ?? "", input.providerId, input.credentialName)
+        : await providerParts(
+            this.host,
+            input.model ?? "",
+            input.providerId,
+            input.credentialName,
+            input.effort,
+          )
     this.created++
     const id = `session-${this.created}`
     const session = this.runtime.openSession({
@@ -391,10 +426,20 @@ export class RuntimeBackend implements SessionBackend {
         ? { persist: { dir: this.persistDir, cwd: this.cwd } }
         : {}),
     })
+    const core = session.agentCore()
+    // The open takes four fixed effort names. `providerParts` checked the level
+    // against the model, so set it here: a model can have other level names.
+    if (input.effort !== undefined && this.host !== undefined) core.setEffort(input.effort)
+    // The tools of THIS session follow the model of THIS session.
+    const { tools } = parts
+    if (tools !== undefined) {
+      core.onTargetChange(({ to }) => {
+        tools.model = to.model
+      })
+    }
     const state: SessionState = {
       summary: {
         id,
-        model: parts.model,
         cwd: this.cwd,
         mode: input.mode ?? "default",
         contextWindow: parts.contextWindow,
@@ -404,8 +449,49 @@ export class RuntimeBackend implements SessionBackend {
       runs: 0,
       status: "idle",
       session,
+      targetQueue: Promise.resolve(),
     }
     this.sessions.set(id, state)
+    return this.summarize(state)
+  }
+
+  /**
+   * Change the target of one session. See {@link SessionBackend.setTarget}
+   * and `backend/target.ts`. Two changes of one session run one after the
+   * other, so each one checks and resolves its auth against the target that
+   * the change before it left.
+   */
+  setTarget(id: string, input: SetTargetInput): Promise<SessionSummary> {
+    const state = this.sessions.get(id)
+    if (state === undefined) {
+      return Promise.reject(new BackendError("not_found", `no session ${id}`))
+    }
+    const result = state.targetQueue.then(() => this.applyTarget(state, input))
+    state.targetQueue = result.catch(() => undefined)
+    return result
+  }
+
+  private async applyTarget(state: SessionState, input: SetTargetInput): Promise<SessionSummary> {
+    const { host } = this
+    if (host === undefined) {
+      throw new BackendError(
+        "bad_target",
+        "scripted mode has one scripted transport: a session has no target to change",
+      )
+    }
+    const core = state.session.agentCore()
+    const selection = await targetSelection(host, core.getTarget(), input)
+    try {
+      // With a turn in progress, the core adds one notice with the two targets
+      // to that turn. With no turn, a notice would be an event outside a run
+      // (the history would show a run that never ends), so the switch is quiet:
+      // the summary that this call returns has the new target.
+      if (selection !== null) core.switchTarget(selection, { quiet: state.status === "idle" })
+      if (input.effort === null) core.setEffort(undefined)
+    } catch (error) {
+      // The core refused it (for example an output schema that the model cannot use).
+      throw new BackendError("bad_target", error instanceof Error ? error.message : String(error))
+    }
     return this.summarize(state)
   }
   /** Every session, newest first. */
@@ -496,8 +582,17 @@ export class RuntimeBackend implements SessionBackend {
   }
 
   private summarize(state: SessionState): SessionSummary {
+    // The live target of this session's own core: a target change shows at once.
+    const target = state.session.agentCore().getTarget()
+    const row =
+      this.host === undefined ? undefined : findRow(this.host, target.model, target.providerId)
     return {
       ...state.summary,
+      model: target.model,
+      ...(target.providerId !== undefined ? { providerId: target.providerId } : {}),
+      ...(target.credentialName !== undefined ? { credentialName: target.credentialName } : {}),
+      ...(target.effort !== undefined ? { effort: target.effort } : {}),
+      contextWindow: row?.contextWindow ?? state.summary.contextWindow,
       title: state.title ?? "New session",
       updatedAt: wholeLogOf(state.session).at(-1)?.ts ?? state.summary.createdAt,
       status: state.status,

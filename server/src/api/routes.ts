@@ -10,6 +10,7 @@
  * | `GET /api/sessions/:id/events`    | Event log as SSE, `id: seq`, resumes at `Last-Event-ID` |
  * | `POST /api/sessions/:id/answers`  | `{ ok: true }`, body `{ askId, answer }`               |
  * | `POST /api/sessions/:id/abort`    | `{ aborted }`, body `{ reason? }` (optional)           |
+ * | `POST /api/sessions/:id/target`   | `{ session }`, body `{ credentialName?, providerId?, model?, effort? }` |
  * | `GET /api/models`                 | `{ models, credentials, defaultModelId }`            |
  *
  * `GET /api/sessions` and `GET /api/sessions/:id` also carry `transport`:
@@ -19,7 +20,15 @@
  * app shows a banner in scripted mode, so it never implies that a real
  * model answers.
  *
- * Errors are JSON `{ error }`: 400 bad body, unknown model, or a `cwd`
+ * `POST .../target` changes the credential, provider, model and effort of
+ * ONE session, at once, also while a turn runs or waits (it is not refused
+ * for a busy session: a switch during a quota wait is its purpose). The body
+ * names a stored credential only. A key that is not one of the four is a
+ * 400, so a token, a key or an endpoint in the body is never read. An
+ * `effort` of `null` sets the model default. See `backend/target.ts`.
+ *
+ * Errors are JSON `{ error }`: 400 bad body, unknown model, a target that
+ * the host does not have, or a `cwd`
  * that is not the server cwd, 404 no
  * session, 405 wrong method, 409 busy session or no such pending ask, 503
  * no credentials for the model. The caller (`server.ts`)
@@ -36,6 +45,7 @@ import {
   BackendError,
   type CreateSessionInput,
   type SessionBackend,
+  type SetTargetInput,
   type TransportInfo,
 } from "../backend/backend.ts"
 import { historyFromEntries } from "../backend/history.ts"
@@ -58,7 +68,7 @@ export const MAX_MESSAGE_CHARS = 100_000
 
 const MODELS = /^\/api\/models\/?$/u
 const SESSIONS = /^\/api\/sessions\/?$/u
-const SESSION = /^\/api\/sessions\/([^/]+)(?:\/(messages|events|answers|abort))?\/?$/u
+const SESSION = /^\/api\/sessions\/([^/]+)(?:\/(messages|events|answers|abort|target))?\/?$/u
 
 class BadRequest extends Error {}
 
@@ -109,11 +119,65 @@ function parseCreate(body: Record<string, unknown>): CreateSessionInput {
   const credentialName = optionalString(body, "credentialName")
   const cwd = optionalString(body, "cwd")
   const mode = optionalString(body, "mode")
+  const effort = optionalString(body, "effort")
+  if (effort !== undefined) input.effort = effort
   if (model !== undefined) input.model = model
   if (providerId !== undefined) input.providerId = providerId
   if (credentialName !== undefined) input.credentialName = credentialName
   if (cwd !== undefined) input.cwd = cwd
   if (mode !== undefined) input.mode = mode
+  return input
+}
+
+/** The keys of a `POST /target` body. Any other key is refused. */
+const TARGET_KEYS: ReadonlySet<string> = new Set([
+  "credentialName",
+  "providerId",
+  "model",
+  "effort",
+])
+
+/** Longest value of a target key. */
+export const MAX_TARGET_VALUE_CHARS = 256
+
+/**
+ * Parse `POST /target`'s body. Each value is a non-empty string, and
+ * `effort` can be `null` (the model default). An unknown key is an error: the
+ * body names stored things only, so a key such as `apiKey` or `baseUrl` is a
+ * client fault, and it must not pass in silence.
+ */
+function parseTarget(body: Record<string, unknown>): SetTargetInput {
+  const keys = Object.keys(body)
+  const unknown = keys.filter((key) => !TARGET_KEYS.has(key))
+  if (unknown.length > 0) {
+    throw new BadRequest(
+      "unknown key in the body. Allowed keys: credentialName, providerId, model, effort",
+    )
+  }
+  if (keys.length === 0) {
+    throw new BadRequest("name a value to change: credentialName, providerId, model or effort")
+  }
+  const input: SetTargetInput = {}
+  for (const key of ["credentialName", "providerId", "model"] as const) {
+    const value = body[key]
+    if (value === undefined) continue
+    if (typeof value !== "string" || value.length === 0 || value.length > MAX_TARGET_VALUE_CHARS) {
+      throw new BadRequest(`${key} must be a non-empty string`)
+    }
+    input[key] = value
+  }
+  const { effort } = body
+  if (effort === null) input.effort = null
+  else if (effort !== undefined) {
+    if (
+      typeof effort !== "string" ||
+      effort.length === 0 ||
+      effort.length > MAX_TARGET_VALUE_CHARS
+    ) {
+      throw new BadRequest("effort must be a non-empty string, or null for the model default")
+    }
+    input.effort = effort
+  }
   return input
 }
 
@@ -164,6 +228,7 @@ export async function handleApi(request: Request, context: ApiContext): Promise<
         unknown_credential: 400,
         auth_unavailable: 503,
         cwd_mismatch: 400,
+        bad_target: 400,
       }[error.code]
       return failure(status, error.message)
     }
@@ -231,6 +296,11 @@ async function route(request: Request, context: ApiContext): Promise<Response> {
       if (method !== "POST") return methodNotAllowed("POST")
       const reason = optionalString(await readBody(request), "reason")
       return json({ aborted: backend.abort(id, reason) })
+    }
+    case "target": {
+      if (method !== "POST") return methodNotAllowed("POST")
+      const session = await backend.setTarget(id, parseTarget(await readBody(request)))
+      return json({ session })
     }
     default:
       return failure(404, "not found")

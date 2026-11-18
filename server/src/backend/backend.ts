@@ -5,13 +5,15 @@
  * `createRuntime` / `openSession` (core S47, S53). Each method maps to one
  * core call: `createSession` to `runtime.openSession`, `startTurn` to
  * `session.run`, `subscribe` to `session.subscribe`, `answer` to
- * `session.answer`, `abort` to `session.abort`. See its module doc for its
+ * `session.answer`, `abort` to `session.abort`, `setTarget` to
+ * `AgentCore.switchTarget` of that session. See its module doc for its
  * two modes: provider mode (a booted host with real auth and tools) and
  * scripted mode (`MA_WEB_SCRIPTED=1`, a scripted transport).
  *
  * Methods throw {@link BackendError} (async methods reject with it) for an
  * unknown session, a busy session, an unknown ask, an unknown model, a
- * model with no credentials, or a client `cwd` that is not the server cwd.
+ * model with no credentials, a target that the host does not have, or a
+ * client `cwd` that is not the server cwd.
  * The routes turn its
  * `code` into an HTTP status.
  *
@@ -65,6 +67,23 @@ export interface CreateSessionInput {
   /** Must resolve to the server cwd when set: tools run there. Else `cwd_mismatch`. */
   cwd?: string
   mode?: string
+  /** Reasoning effort: one of the levels of the model. Absent: the model default. */
+  effort?: string
+}
+
+/**
+ * What `POST /api/sessions/:id/target` accepts: the values to change. An
+ * absent value stays as it is, with one exception: a change of
+ * `providerId` with no `credentialName` uses the default credential of the
+ * new provider. A change of `providerId` needs a `model` of that provider.
+ */
+export interface SetTargetInput {
+  /** A stored credential of the provider, by name. Never a token or a key. */
+  credentialName?: string
+  providerId?: string
+  model?: string
+  /** A level of the model, or `null` for the model default. */
+  effort?: string | null
 }
 
 /** What a session is doing now. */
@@ -75,11 +94,18 @@ export interface SessionSummary {
   id: string
   /** The first user message, shortened, or "New session". */
   title: string
+  /** The live model: a target change updates it. */
   model: string
+  /** The live provider. Absent in scripted mode. */
+  providerId?: string
+  /** The live credential name. Absent for the default credential of the provider. */
+  credentialName?: string
+  /** The live reasoning effort. Absent for the model default. */
+  effort?: string
   /** The server process cwd: where the session's tools run. */
   cwd: string
   mode: string
-  /** Context window in tokens, for the Context element. From the model row, or a placeholder in scripted mode. */
+  /** Context window in tokens of the live model, for the Context element. From the model row, or a placeholder in scripted mode. */
   contextWindow: number
   /** Epoch ms. */
   createdAt: number
@@ -131,6 +157,15 @@ export interface SessionBackend {
   answer(id: string, askId: string, answer: string | null): void
   /** Abort the current turn. Returns false when no turn runs. */
   abort(id: string, reason?: string): boolean
+  /**
+   * Change the target of ONE session: its credential, provider, model and
+   * effort. It applies at once, also while a turn runs or waits for a retry
+   * or a quota reset: the turn continues with the new target and is not
+   * aborted. No other session changes. Rejects with `not_found`,
+   * `bad_target`, `unknown_credential`, `unknown_model` or
+   * `auth_unavailable`; then nothing changed.
+   */
+  setTarget(id: string, input: SetTargetInput): Promise<SessionSummary>
   /** Stop every run and timer. */
   close(): void
 }
@@ -138,8 +173,10 @@ export interface SessionBackend {
 /**
  * Why a backend call failed: no such session, a turn already runs, no such
  * pending ask, no such model, a credentialName with no providerId, no such
- * stored credential, no credentials for the model, or a client
- * `cwd` that is not the server cwd.
+ * stored credential, no credentials for the model, a target that cannot be
+ * set (`bad_target`: an effort that the model does not have, a switch that
+ * the core refuses, or scripted mode), or a client `cwd` that is not the
+ * server cwd.
  */
 export type BackendErrorCode =
   | "not_found"
@@ -150,6 +187,7 @@ export type BackendErrorCode =
   | "unknown_credential"
   | "auth_unavailable"
   | "cwd_mismatch"
+  | "bad_target"
 
 /** A backend call failed for a reason the caller can act on. */
 export class BackendError extends Error {

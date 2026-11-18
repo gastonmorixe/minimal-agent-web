@@ -18,6 +18,21 @@
  * {@link readRecordedAuth}. A test uses it to prove which credentials reach
  * the provider.
  *
+ * It also appends the model, the effort and the auth of each request to
+ * {@link StubProviderHome.requestLog}. Read it with
+ * {@link readRecordedRequests}. A test uses it to prove which target a
+ * request of a session had.
+ *
+ * With `targetModels: true`, the stub registers three more models, for the
+ * tests of a target change:
+ *
+ * - {@link StubProviderHome.plainModelId}: answers with plain text, with no
+ *   tool call. Effort levels `low` and `high`, and its own context window.
+ * - {@link StubProviderHome.limitedModelId}: each request fails with a
+ *   transient error that has a `Retry-After` of one hour. So a turn on it
+ *   waits, as a turn on a credential with a full quota does.
+ * - {@link StubProviderHome.noEffortModelId}: plain text, no effort levels.
+ *
  * @module backend/stub-provider.fixture
  */
 
@@ -49,12 +64,28 @@ export interface StubProviderHome {
   authLog: string
   /** The auth `anonymousAuth` returns, or `null` when the stub declares none. */
   anonymousAuth: { kind: "api-key"; key: string } | null
+  /** File the stub appends `{ modelId, effort, auth }` of each request to, one JSON line each. */
+  requestLog: string
+  /** With `targetModels`: a model that answers with plain text. Levels `low`, `high`. */
+  plainModelId: string
+  /** With `targetModels`: a model whose requests fail with a `Retry-After` of one hour. */
+  limitedModelId: string
+  /** With `targetModels`: a plain-text model with no effort levels. */
+  noEffortModelId: string
 }
+
+/** Context window of {@link StubProviderHome.plainModelId}. Not the one of the first model. */
+export const STUB_PLAIN_CONTEXT_WINDOW = 54_321
+
+/** The wait that {@link StubProviderHome.limitedModelId} asks for, in ms. */
+export const STUB_LIMITED_RETRY_AFTER_MS = 3_600_000
 
 /** Options for {@link writeStubProviderHome}. */
 export interface StubProviderOptions {
   /** Declare `anonymousAuth`. Default `true`. With `false`, `host.resolveAuth` fails. */
   anonymousAuth?: boolean
+  /** Register the three models for the tests of a target change. Default `false`. */
+  targetModels?: boolean
 }
 
 /**
@@ -96,6 +127,10 @@ export function writeStubProviderHome(
   const fileText = `stub file text for ${id}`
   const answerText = `stub answer from ${id}`
   const authLog = join(root, "auth.jsonl")
+  const requestLog = join(root, "requests.jsonl")
+  const plainModelId = `${id}-plain`
+  const limitedModelId = `${id}-limited`
+  const noEffortModelId = `${id}-noeffort`
   const anonymousAuth =
     options.anonymousAuth === false ? null : { kind: "api-key" as const, key: `anon-key-${id}` }
   writeFileSync(readPath, `${fileText}\n`)
@@ -105,7 +140,17 @@ export function writeStubProviderHome(
   )
   writeFileSync(
     join(pluginDir, "index.ts"),
-    stubEntry({ id, modelId, readPath, answerText, authLog, anonymousAuth }),
+    stubEntry({
+      id,
+      modelId,
+      readPath,
+      answerText,
+      authLog,
+      anonymousAuth,
+      requestLog,
+      targetModels:
+        options.targetModels === true ? { plainModelId, limitedModelId, noEffortModelId } : null,
+    }),
   )
   return {
     root,
@@ -119,7 +164,39 @@ export function writeStubProviderHome(
     answerText,
     authLog,
     anonymousAuth,
+    requestLog,
+    plainModelId,
+    limitedModelId,
+    noEffortModelId,
   }
+}
+
+/** One request that the stub got. */
+export interface RecordedRequest {
+  modelId: string
+  /** Absent for the model default. */
+  effort?: string
+  auth: unknown
+}
+
+/** Every request the stub got so far, oldest first. */
+export function readRecordedRequests(stub: StubProviderHome): RecordedRequest[] {
+  if (!existsSync(stub.requestLog)) return []
+  const requests: RecordedRequest[] = []
+  for (const line of readFileSync(stub.requestLog, "utf8").split("\n")) {
+    if (line.length === 0) continue
+    const value: unknown = JSON.parse(line)
+    if (typeof value !== "object" || value === null) continue
+    const modelId: unknown = Reflect.get(value, "modelId")
+    const effort: unknown = Reflect.get(value, "effort")
+    if (typeof modelId !== "string") continue
+    requests.push({
+      modelId,
+      ...(typeof effort === "string" ? { effort } : {}),
+      auth: Reflect.get(value, "auth"),
+    })
+  }
+  return requests
 }
 
 /** Every auth the stub got so far, oldest first. */
@@ -139,23 +216,66 @@ interface StubEntryInput {
   answerText: string
   authLog: string
   anonymousAuth: StubProviderHome["anonymousAuth"]
+  requestLog: string
+  targetModels: { plainModelId: string; limitedModelId: string; noEffortModelId: string } | null
 }
 
 /** Source of the stub provider entry file. */
 function stubEntry(input: StubEntryInput): string {
-  const { id, modelId, readPath, answerText, authLog, anonymousAuth } = input
+  const { id, modelId, readPath, answerText, authLog, anonymousAuth, requestLog } = input
   const q = (value: unknown) => JSON.stringify(value)
   const anonymous = anonymousAuth === null ? "" : `anonymousAuth: () => (${q(anonymousAuth)}),`
+  const extra = input.targetModels
+  const pricing =
+    "{ inputUSD: 1, outputUSD: 2, cacheWriteUSD: 0, cacheReadUSD: 0, webSearchPerCallUSD: 0 }"
+  const registerExtra =
+    extra === null
+      ? ""
+      : `
+    const more = [
+      [${q(extra.plainModelId)}, ${STUB_PLAIN_CONTEXT_WINDOW}, ["low", "high"]],
+      [${q(extra.limitedModelId)}, ${STUB_CONTEXT_WINDOW}, ["low", "high"]],
+      [${q(extra.noEffortModelId)}, ${STUB_CONTEXT_WINDOW}, []],
+    ]
+    for (const [modelId, contextWindow, levels] of more) {
+      ctx.models.register({
+        id: modelId,
+        providerId: ${q(id)},
+        surfaceId: "stub-surface",
+        displayName: modelId + " display",
+        capabilities: {
+          contextWindow,
+          maxOutputTokens: 1000,
+          effort: { levels, default: levels[0] ?? "medium" },
+        },
+        pricing: ${pricing},
+      })
+    }`
   return `
 import { appendFileSync } from "node:fs"
 
 const usage = { inputTokens: 10, outputTokens: 5 }
 
+const PLAIN = ${q(extra === null ? [] : [extra.plainModelId, extra.noEffortModelId])}
+const LIMITED = ${q(extra?.limitedModelId ?? "")}
+
 async function* run(req, _model, ctx) {
   appendFileSync(${q(authLog)}, JSON.stringify(ctx.auth) + "\\n")
+  appendFileSync(
+    ${q(requestLog)},
+    JSON.stringify({ modelId: req.modelId, effort: req.effort, auth: ctx.auth }) + "\\n",
+  )
+  if (LIMITED !== "" && req.modelId === LIMITED) {
+    // As a 429 with Retry-After: a transient error with a wait of one hour.
+    throw Object.assign(new Error("stub: the quota of this model is full"), {
+      errorClass: "transient",
+      streamErrorType: "rate_limit_error",
+      retryAfterMs: ${STUB_LIMITED_RETRY_AFTER_MS},
+    })
+  }
   const hasResult = JSON.stringify(req.messages).includes("tool_result")
   yield { type: "message_start", messageId: "stub-msg", modelId: req.modelId, initialUsage: usage }
-  if (hasResult) {
+  if (hasResult || PLAIN.includes(req.modelId)) {
     yield { type: "text_start", index: 0 }
     yield { type: "text_delta", index: 0, text: ${q(answerText)} }
     yield { type: "text_stop", index: 0 }
@@ -189,8 +309,8 @@ export const providerPlugin = {
       surfaceId: "stub-surface",
       displayName: ${q(`${modelId} display`)},
       capabilities: { contextWindow: ${STUB_CONTEXT_WINDOW}, maxOutputTokens: 1000 },
-      pricing: { inputUSD: 1, outputUSD: 2, cacheWriteUSD: 0, cacheReadUSD: 0, webSearchPerCallUSD: 0 },
-    })
+      pricing: ${pricing},
+    })${registerExtra}
   },
 }
 `

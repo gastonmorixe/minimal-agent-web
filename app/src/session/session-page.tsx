@@ -5,19 +5,29 @@
  * draws from it, and the chat uses it to see runs it did not start. The chat
  * stays mounted while the trace is shown, so a turn keeps streaming.
  *
+ * The header has the target control (`target-control.tsx`): the credential,
+ * the model and the effort of the session. It stays active during a turn.
+ *
  * @module session/session-page
  */
 
 import { ActivityIcon, MessageSquareIcon } from "lucide-react"
 import * as React from "react"
-import { getSession } from "@/api/client.ts"
-import type { ChatMessage, SessionSummary } from "@/api/types.ts"
+import { getSession, setSessionTarget } from "@/api/client.ts"
+import type {
+  ChatMessage,
+  CredentialInfo,
+  ModelRow,
+  SessionSummary,
+  SetTargetInput,
+} from "@/api/types.ts"
 import { ChatView } from "@/chat/chat-view.tsx"
 import { ContextMeter } from "@/chat/context-meter.tsx"
 import { type DecodedMessage, decodeHistory } from "@/chat/history.ts"
 import { Button } from "@/components/ui/button"
 import { TraceView } from "@/trace/trace-view.tsx"
 
+import { TargetControl } from "./target-control.tsx"
 import { runState, useEventLog } from "./use-event-log.ts"
 
 type Loaded =
@@ -32,15 +42,35 @@ export interface SessionPageProps {
   view: "chat" | "trace"
   /** The newest summary from the session list, if it has one. */
   summary?: SessionSummary
+  /** The models and stored credentials of the server, for the target control. */
+  models?: readonly ModelRow[]
+  credentials?: readonly CredentialInfo[]
   onView: (view: "chat" | "trace") => void
   /** A run started or ended: the session list may be stale. */
   onActivity: (active: boolean, finishedRuns: number) => void
 }
 
+const NO_MODELS: readonly ModelRow[] = []
+const NO_CREDENTIALS: readonly CredentialInfo[] = []
+
 /** The page of one session. Mount it with `key={id}`. */
-export function SessionPage({ id, view, summary, onView, onActivity }: SessionPageProps) {
+export function SessionPage({
+  id,
+  view,
+  summary,
+  models = NO_MODELS,
+  credentials = NO_CREDENTIALS,
+  onView,
+  onActivity,
+}: SessionPageProps) {
   const [loaded, setLoaded] = React.useState<Loaded>({ kind: "loading" })
   const [messages, setMessages] = React.useState<ChatMessage[]>([])
+  // The summary that the last target change returned, with the list summary
+  // that it replaced. It is the newest one until the session list loads again
+  // (then `summary` is a new object, and this one is not used).
+  const [changed, setChanged] = React.useState<
+    { replaced: SessionSummary | undefined; session: SessionSummary } | undefined
+  >(undefined)
   const log = useEventLog(id)
   const run = React.useMemo(() => runState(log.entries), [log.entries])
 
@@ -74,6 +104,15 @@ export function SessionPage({ id, view, summary, onView, onActivity }: SessionPa
     [run.active, run.finishedRuns, onActivity],
   )
 
+  const onTarget = React.useCallback(
+    async (input: SetTargetInput) => {
+      setChanged({ replaced: summary, session: await setSessionTarget(id, input) })
+      // The session list has the old target: load it again.
+      onActivity(run.active, run.finishedRuns)
+    },
+    [id, summary, onActivity, run.active, run.finishedRuns],
+  )
+
   if (loaded.kind === "loading")
     return <p className="p-6 text-sm text-muted-foreground">Loading&hellip;</p>
   if (loaded.kind === "missing") {
@@ -87,7 +126,10 @@ export function SessionPage({ id, view, summary, onView, onActivity }: SessionPa
   if (loaded.kind === "error")
     return <p className="p-6 text-sm text-destructive">{loaded.message}</p>
 
-  const session = summary ?? loaded.session
+  const session =
+    changed !== undefined && changed.replaced === summary
+      ? changed.session
+      : (summary ?? loaded.session)
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <header className="flex flex-wrap items-center gap-2 border-b px-6 py-3">
@@ -99,6 +141,12 @@ export function SessionPage({ id, view, summary, onView, onActivity }: SessionPa
             {session.id} · {session.model} · {session.mode}
           </p>
         </div>
+        <TargetControl
+          target={session}
+          models={models}
+          credentials={credentials}
+          onChange={onTarget}
+        />
         <ContextMeter messages={messages} limit={session.contextWindow} />
         <div className="flex gap-1" role="tablist" aria-label="Session view">
           <Button

@@ -116,8 +116,20 @@ describe("credentialKey", () => {
 
 describe("NewSessionPanel", () => {
   const models = [
-    { id: "a-model", providerId: "alpha", displayName: "A model", contextWindow: 1000 },
-    { id: "b-model", providerId: "beta", displayName: "B model", contextWindow: 1000 },
+    {
+      id: "a-model",
+      providerId: "alpha",
+      displayName: "A model",
+      contextWindow: 1000,
+      effortLevels: [],
+    },
+    {
+      id: "b-model",
+      providerId: "beta",
+      displayName: "B model",
+      contextWindow: 1000,
+      effortLevels: [],
+    },
   ]
   const colliding: readonly CredentialInfo[] = Object.freeze([
     {
@@ -188,9 +200,60 @@ describe("NewSessionPanel", () => {
     expect(good).not.toContain('disabled=""')
   })
 
+  test("a model with effort levels gets an effort select on the model default, and Create does not wait for it", () => {
+    const withLevels = [
+      {
+        id: "a-model",
+        providerId: "alpha",
+        displayName: "A model",
+        contextWindow: 1000,
+        effortLevels: ["low", "high"],
+      },
+      ...models.slice(1),
+    ]
+    const props = {
+      credentials: colliding,
+      creating: false,
+      onCredentialChange: noop,
+      onModelChange: noop,
+      onEffortChange: noop,
+      onCreate: noop,
+    }
+    const html = renderToString(
+      <NewSessionPanel
+        {...props}
+        models={withLevels}
+        credentialKey="alpha:shared"
+        modelId="alpha:a-model"
+      />,
+    )
+    expect(html).toContain('data-testid="effort-select"')
+    expect(html).not.toContain('disabled=""')
+    // A model with no levels, and a panel with no model yet: no effort select.
+    const none = renderToString(
+      <NewSessionPanel
+        {...props}
+        models={withLevels}
+        credentialKey="beta:shared"
+        modelId="beta:b-model"
+      />,
+    )
+    expect(none).not.toContain('data-testid="effort-select"')
+    const noModel = renderToString(
+      <NewSessionPanel {...props} models={withLevels} credentialKey="alpha:shared" modelId="" />,
+    )
+    expect(noModel).not.toContain('data-testid="effort-select"')
+  })
+
   test("a colon name enables Create for the right provider only", () => {
     const colonModels = [
-      { id: "east-model", providerId: "beta", displayName: "East model", contextWindow: 1000 },
+      {
+        id: "east-model",
+        providerId: "beta",
+        displayName: "East model",
+        contextWindow: 1000,
+        effortLevels: [],
+      },
     ]
     const colonCreds: readonly CredentialInfo[] = Object.freeze([
       {

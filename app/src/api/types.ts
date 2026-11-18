@@ -32,6 +32,11 @@ export interface ModelRow {
   providerId: string
   displayName: string
   contextWindow: number
+  /**
+   * The reasoning effort levels of the model, in the order of the model.
+   * Empty when the model has none, or when the server did not send them.
+   */
+  effortLevels: string[]
 }
 
 /** One credential the server can use (core credential entry, the fields the app reads). */
@@ -62,6 +67,19 @@ export interface CreateSessionInput {
   credentialName?: string
   cwd?: string
   mode?: string
+  /** One of the effort levels of the model. Absent: the model default. */
+  effort?: string
+}
+
+/**
+ * `POST /api/sessions/:id/target` body: the values to change. A stored
+ * credential by name only. `effort: null` is the model default.
+ */
+export interface SetTargetInput {
+  credentialName?: string
+  providerId?: string
+  model?: string
+  effort?: string | null
 }
 
 /** What a session is doing now. */
@@ -71,7 +89,14 @@ export type SessionStatus = "idle" | "running" | "waiting"
 export interface SessionSummary {
   id: string
   title: string
+  /** The live model: a target change updates it. */
   model: string
+  /** The live provider. Absent in scripted mode. */
+  providerId?: string
+  /** The live credential name. Absent for the default credential of the provider. */
+  credentialName?: string
+  /** The live reasoning effort. Absent for the model default. */
+  effort?: string
   cwd: string
   mode: string
   contextWindow: number
