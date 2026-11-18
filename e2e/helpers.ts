@@ -22,7 +22,7 @@ export async function openApp(page: Page, path = "/"): Promise<void> {
 /** Create a session from the sidebar and wait for its page. Returns its id. */
 export async function newSession(page: Page): Promise<string> {
   await page.getByTestId("new-session").click()
-  await expect(page).toHaveURL(/\/sessions\/session-\d+$/u)
+  await expect(page).toHaveURL(/\/sessions\/[0-9a-f-]{36}$/u)
   return new URL(page.url()).pathname.split("/")[2] ?? ""
 }
 

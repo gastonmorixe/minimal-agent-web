@@ -63,6 +63,8 @@ import {
 } from "@minimal-agent/core/host-kit/host-boot"
 import { resolveAgentHome } from "@minimal-agent/core/plugin-api/utils/agent-paths"
 
+import packageJson from "../package.json" with { type: "json" }
+
 import { bootErrorText, WEB_BOOT_CONTRACTS } from "./backend/boot-error-text.ts"
 import { RuntimeBackend } from "./backend/runtime-backend.ts"
 import { createScriptedTransport } from "./backend/transport/scripted-transport.ts"
@@ -148,6 +150,9 @@ function pluginRoots(): HostBootOptions {
   }
 }
 
+/** The server version, for the plugin agent identity (`ctx.agent.version`). */
+const VERSION: string = packageJson.version
+
 /** Print one line to stderr and exit with `code`. */
 function fail(message: string, code: number): never {
   console.error(`minimal-agent web: ${message}`)
@@ -161,7 +166,7 @@ function fail(message: string, code: number): never {
 async function bootOrExit(): Promise<BootedHost> {
   let host: BootedHost
   try {
-    host = await bootHost({ ...pluginRoots(), ...WEB_BOOT_CONTRACTS })
+    host = await bootHost({ ...pluginRoots(), ...WEB_BOOT_CONTRACTS, version: VERSION })
   } catch (error) {
     fail(`boot failed: ${bootErrorText(error)}`, 2)
   }
@@ -194,6 +199,7 @@ const persistDir = process.env.MA_WEB_PERSIST_DIR
 const retryCeilingMs = numberFromEnv("MA_WEB_RETRY_CEILING_MS")
 const scriptStepDelayMs = numberFromEnv("MA_WEB_SCRIPT_STEP_MS")
 const backend = new RuntimeBackend({
+  version: VERSION,
   ...(scripted
     ? {
         // A factory, not a shared instance: each session needs its own transport
