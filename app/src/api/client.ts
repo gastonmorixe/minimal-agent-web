@@ -17,6 +17,7 @@ import type {
   SessionDetail,
   SessionList,
   SessionSummary,
+  SetTargetInput,
   TransportInfo,
 } from "./types.ts"
 
@@ -116,14 +117,30 @@ export function isCredential(value: unknown): value is CredentialInfo {
   )
 }
 
-function isModelRow(value: unknown): value is ModelRow {
-  return (
-    isRecord(value) &&
-    typeof value.id === "string" &&
-    typeof value.providerId === "string" &&
-    typeof value.displayName === "string" &&
-    typeof value.contextWindow === "number"
-  )
+/**
+ * One model row of `GET /api/models`, or null for a value that is not one.
+ * The effort levels come from `capabilities.effort.levels`. A row with no
+ * levels there (an older server) is kept, with no effort levels.
+ */
+export function modelRowFrom(value: unknown): ModelRow | null {
+  if (
+    !isRecord(value) ||
+    typeof value.id !== "string" ||
+    typeof value.providerId !== "string" ||
+    typeof value.displayName !== "string" ||
+    typeof value.contextWindow !== "number"
+  ) {
+    return null
+  }
+  const effort = isRecord(value.capabilities) ? value.capabilities.effort : undefined
+  const levels = isRecord(effort) && Array.isArray(effort.levels) ? effort.levels : []
+  return {
+    id: value.id,
+    providerId: value.providerId,
+    displayName: value.displayName,
+    contextWindow: value.contextWindow,
+    effortLevels: levels.filter((level): level is string => typeof level === "string"),
+  }
 }
 
 function transportOf(body: Record<string, unknown>): TransportInfo {
@@ -161,7 +178,9 @@ export async function listSessions(): Promise<SessionList> {
 /** `GET /api/models`: the booted models, the usable credentials, and the deprecated default model id. */
 export async function listModels(): Promise<ModelList> {
   const body = await readJson(await apiFetch("/api/models"))
-  const models = Array.isArray(body.models) ? body.models.filter(isModelRow) : []
+  const models = Array.isArray(body.models)
+    ? body.models.map(modelRowFrom).filter((row): row is ModelRow => row !== null)
+    : []
   const credentials = Array.isArray(body.credentials) ? body.credentials.filter(isCredential) : []
   const defaultModelId = typeof body.defaultModelId === "string" ? body.defaultModelId : ""
   return { models, credentials, defaultModelId }
@@ -170,7 +189,7 @@ export async function listModels(): Promise<ModelList> {
 /**
  * `POST /api/sessions`. `model` is required in provider mode, omitted in
  * scripted mode. `providerId` and `credentialName` pick the credential.
- * Unknown keys stay out.
+ * `effort` is a level of the model. Unknown keys stay out.
  */
 export async function createSession(input: CreateSessionInput = {}): Promise<SessionSummary> {
   const body: Record<string, string> = {}
@@ -179,6 +198,7 @@ export async function createSession(input: CreateSessionInput = {}): Promise<Ses
   if (input.credentialName !== undefined) body.credentialName = input.credentialName
   if (input.cwd !== undefined) body.cwd = input.cwd
   if (input.mode !== undefined) body.mode = input.mode
+  if (input.effort !== undefined) body.effort = input.effort
   const response = await send("/api/sessions", body)
   if (!isSummary(response.session)) throw new ApiError(500, "the server sent no session")
   return response.session
@@ -200,6 +220,31 @@ export async function getSession(id: string): Promise<SessionDetail | null> {
  */
 export async function answerAsk(id: string, askId: string, answer: string | null): Promise<void> {
   await send(`/api/sessions/${encodeURIComponent(id)}/answers`, { askId, answer })
+}
+
+/**
+ * The body of `POST /api/sessions/:id/target` for `input`: only the four
+ * target keys, and only the ones that are set. The server refuses any other
+ * key. The token is never part of it: it goes in the `Authorization` header.
+ */
+export function targetBody(input: SetTargetInput): Record<string, string | null> {
+  const body: Record<string, string | null> = {}
+  if (input.credentialName !== undefined) body.credentialName = input.credentialName
+  if (input.providerId !== undefined) body.providerId = input.providerId
+  if (input.model !== undefined) body.model = input.model
+  if (input.effort !== undefined) body.effort = input.effort
+  return body
+}
+
+/**
+ * `POST /api/sessions/:id/target`: change the credential, provider, model or
+ * effort of one session. It works while a turn runs or waits. Returns the
+ * new summary. A refusal throws {@link ApiError} with the server's reason.
+ */
+export async function setSessionTarget(id: string, input: SetTargetInput): Promise<SessionSummary> {
+  const response = await send(`/api/sessions/${encodeURIComponent(id)}/target`, targetBody(input))
+  if (!isSummary(response.session)) throw new ApiError(500, "the server sent no session")
+  return response.session
 }
 
 /** `POST /api/sessions/:id/abort`. True when a turn was running. */

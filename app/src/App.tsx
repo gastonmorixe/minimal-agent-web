@@ -7,7 +7,8 @@
  * every page, so a scripted reply is never taken for a real agent's. In
  * provider mode a short line names the provider and the usable credential
  * count from `GET /api/models`. The person picks a credential and a model
- * for each new session. Nothing is auto-picked.
+ * for each new session. Nothing is auto-picked. An open session can change
+ * its credential, model and effort at any time (`session/target-control.tsx`).
  *
  * @module App
  */
@@ -111,6 +112,8 @@ function Shell() {
   const [credentials, setCredentials] = React.useState<CredentialInfo[]>([])
   const [credentialKey, setCredentialKey] = React.useState("")
   const [modelId, setModelId] = React.useState("")
+  // The effort of the new session, or "" for the model default.
+  const [effort, setEffort] = React.useState("")
   const [sessions, setSessions] = React.useState<SessionSummary[]>([])
   const [creating, setCreating] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
@@ -148,6 +151,13 @@ function Shell() {
   function onCredentialChange(key: string) {
     setCredentialKey(key)
     setModelId("")
+    setEffort("")
+  }
+
+  // The effort levels belong to one model: a new model starts on its default.
+  function onModelChange(id: string) {
+    setModelId(id)
+    setEffort("")
   }
 
   async function onCreate() {
@@ -164,6 +174,7 @@ function Shell() {
         model,
         providerId: credential.providerId,
         credentialName: credential.credentialName,
+        ...(effort !== "" ? { effort } : {}),
       })
       refresh()
       navigate({ name: "session", id: session.id, view: "chat" })
@@ -206,9 +217,11 @@ function Shell() {
               credentials={credentials}
               credentialKey={credentialKey}
               modelId={modelId}
+              effort={effort}
               creating={creating}
               onCredentialChange={onCredentialChange}
-              onModelChange={setModelId}
+              onModelChange={onModelChange}
+              onEffortChange={setEffort}
               onCreate={() => void onCreate()}
             />
           )}
@@ -237,6 +250,8 @@ function Shell() {
               id={route.id}
               view={route.view}
               summary={sessions.find((session) => session.id === route.id)}
+              models={models}
+              credentials={credentials}
               onView={(view) => open({ name: "session", id: route.id, view })}
               onActivity={refresh}
             />

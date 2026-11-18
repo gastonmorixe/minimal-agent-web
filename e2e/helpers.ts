@@ -9,6 +9,11 @@ export function token(): string {
   return value
 }
 
+/** The base URL of the provider-mode server (see `playwright.config.ts`). */
+export function providerUrl(): string {
+  return `http://127.0.0.1:${Number(process.env.E2E_PORT ?? 4390) + 1}`
+}
+
 /** Open the app with the token in the fragment, as the printed URL does. */
 export async function openApp(page: Page, path = "/"): Promise<void> {
   await page.goto(`${path}#token=${token()}`)

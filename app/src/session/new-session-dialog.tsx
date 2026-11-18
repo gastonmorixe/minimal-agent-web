@@ -6,6 +6,9 @@
  * is by provider, and each credential line names the label, the provider,
  * and the auth kind.
  *
+ * A model with effort levels also gets an effort select. It starts on "model
+ * default" and is optional: Create does not wait for it.
+ *
  * @module session/new-session-dialog
  */
 
@@ -29,11 +32,17 @@ export interface NewSessionPanelProps {
   credentials: readonly CredentialInfo[]
   credentialKey: string
   modelId: string
+  /** The picked effort level, or "" for the model default. */
+  effort?: string
   creating: boolean
   onCredentialChange: (key: string) => void
   onModelChange: (id: string) => void
+  onEffortChange?: (level: string) => void
   onCreate: () => void
 }
+
+/** The select value for "the model default" effort. Not a level name of a model. */
+const DEFAULT_EFFORT = "\u0000default"
 
 /**
  * The select value for a credential. The name alone is not unique: two
@@ -93,9 +102,11 @@ export function NewSessionPanel({
   credentials,
   credentialKey,
   modelId,
+  effort = "",
   creating,
   onCredentialChange,
   onModelChange,
+  onEffortChange,
   onCreate,
 }: NewSessionPanelProps) {
   const byKey = credentialMapFor(credentials)
@@ -103,6 +114,7 @@ export function NewSessionPanel({
   const visibleModels =
     picked === undefined ? [] : models.filter((model) => model.providerId === picked.providerId)
   const ready = picked !== undefined && modelId !== ""
+  const levels = visibleModels.find((model) => modelKeyFor(model) === modelId)?.effortLevels ?? []
   const usableCount = credentials.filter((entry) => entry.usable).length
 
   return (
@@ -152,6 +164,24 @@ export function NewSessionPanel({
           ))}
         </SelectContent>
       </Select>
+      {levels.length > 0 && onEffortChange !== undefined && (
+        <Select
+          value={effort === "" ? DEFAULT_EFFORT : effort}
+          onValueChange={(value) => onEffortChange(value === DEFAULT_EFFORT ? "" : value)}
+        >
+          <SelectTrigger className="w-full" aria-label="Effort" data-testid="effort-select">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={DEFAULT_EFFORT}>Effort: model default</SelectItem>
+            {levels.map((level) => (
+              <SelectItem key={level} value={level}>
+                Effort: {level}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
       <Button onClick={onCreate} disabled={creating || !ready} size="sm" data-testid="new-session">
         <PlusIcon />
         {creating ? "Creating..." : "Create session"}
