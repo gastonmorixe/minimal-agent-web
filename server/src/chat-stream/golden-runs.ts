@@ -182,6 +182,68 @@ const TOOL_ERROR_TURN: GoldenRun = {
   ]),
 }
 
+/**
+ * Two turns whose thinking blocks carry no plaintext: the provider streams the
+ * signature only (`display: "omitted"`), so no `thinking_delta` ever arrives.
+ * Every other delta-bearing golden would mask the bug this pins: core emits
+ * `item_completed` thinking at the END of the turn, so a part opened there
+ * renders below its own answer. The `block_started` / `block_stopped` pair is
+ * the only early edge the adapter gets, and it must open the part. The second
+ * turn is the shape of a real session (`reasoningTokens` non-zero, text empty).
+ */
+const SIGNATURE_THINKING_TURN: GoldenRun = {
+  name: "signature-thinking-turn",
+  inputs: run("msg-signature-thinking", [
+    { type: "turn_started", turn: 1 },
+    { type: "block_started", itemType: "thinking", id: "1:thinking" },
+    { type: "block_stopped", itemType: "thinking", id: "1:thinking" },
+    { type: "item_started", itemType: "thinking", id: "1:0" },
+    { type: "item_completed", itemType: "thinking", id: "1:0", text: "" },
+    { type: "item_started", itemType: "tool_use", id: "toolu_01", toolName: "WebSearch" },
+    { type: "item_completed", itemType: "tool_use", id: "toolu_01", text: "WebSearch" },
+    {
+      type: "tool_call",
+      callId: "toolu_01",
+      toolName: "WebSearch",
+      input: { query: "latest news today" },
+      inputSummary: "latest news today",
+    },
+    {
+      type: "tool_result",
+      id: "toolu_01",
+      name: "WebSearch",
+      isError: false,
+      inputSummary: "latest news today",
+      outputSummary: "5 results",
+      durationMs: 811,
+    },
+    {
+      type: "turn_completed",
+      turn: 1,
+      stopReason: "tool_use",
+      usage: { inputTokens: 4, outputTokens: 177, reasoningTokens: 63 },
+    },
+    { type: "turn_started", turn: 2 },
+    { type: "block_started", itemType: "thinking", id: "2:thinking" },
+    { type: "block_stopped", itemType: "thinking", id: "2:thinking" },
+    { type: "block_started", itemType: "text", id: "2:text" },
+    { type: "text_delta", id: "2:text", text: "Here are the top" },
+    { type: "text_delta", id: "2:text", text: " news items." },
+    { type: "block_stopped", itemType: "text", id: "2:text" },
+    { type: "item_started", itemType: "thinking", id: "2:0" },
+    { type: "item_completed", itemType: "thinking", id: "2:0", text: "" },
+    { type: "item_started", itemType: "text", id: "2:1" },
+    { type: "item_completed", itemType: "text", id: "2:1", text: "Here are the top news items." },
+    {
+      type: "turn_completed",
+      turn: 2,
+      stopReason: "end_turn",
+      usage: { inputTokens: 2, outputTokens: 428, reasoningTokens: 63 },
+    },
+    { type: "run_finished", outcome: "completed" },
+  ]),
+}
+
 /** A preflight ask (spec v1 S17). Synthetic — see the module doc. */
 const ASK_TURN: GoldenRun = {
   name: "ask-turn",
@@ -303,6 +365,7 @@ const BUFFERED_CONTINUATION: GoldenRun = {
 export const GOLDEN_RUNS: readonly GoldenRun[] = [
   TEXT_TURN,
   REASONING_TURN,
+  SIGNATURE_THINKING_TURN,
   TOOL_TURN,
   TOOL_ERROR_TURN,
   ASK_TURN,
