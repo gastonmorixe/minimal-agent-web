@@ -1,0 +1,24 @@
+{
+  "exempt": [
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "scripts/**",
+    "e2e/**",
+    "playwright.config.ts",
+    "app/**"
+  ],
+  "allow": {
+    "server/src/api/internal-error.ts": {
+      "count": 1,
+      "kind": "L",
+      "reason": "TEMP debt: request handlers log internal errors with console.error, from code that runs under the server, not at its entry.",
+      "target": "an injected server logger (log.error), or a diagnostic on the core bus once the server attaches a sink"
+    },
+    "server/src/main.ts": {
+      "count": 6,
+      "kind": "R",
+      "reason": "The web server's own process entry: it prints the boot lines (listening address, open URL) and fatal boot errors for the operator. The web server is the host here, so this is its final renderer.",
+      "target": "bind one `log` writer here and pass it to the server; core diagnostics should also be attached to the bus in this file"
+    }
+  }
+}
