@@ -17,7 +17,7 @@
  * | `retry-boundary`          | `text-delta` with the stall marker text            |
  * | `thinking_delta`          | `reasoning-start` (first delta), `reasoning-delta` |
  * | `item_completed` text     | `text-end`                                         |
- * | `item_completed` thinking | `reasoning-end`                                    |
+ * | `item_completed` thinking | `reasoning-end` (the edge opened it, or opens it)  |
  * | `item_completed` tool_use | `tool-input-available` (`input: null`)             |
  * | `tool_call`               | `tool-input-available` (real `input`)              |
  * | `tool_output`             | `tool-output-available` (`preliminary: true`)      |
@@ -26,8 +26,9 @@
  * | `status`                  | `data-status` (transient)                          |
  * | `quota`                   | `data-usage` (`kind: "quota"`)                     |
  * | `user_message`            | nothing (the client already has it)                |
- * | `block_started`           | nothing (the first delta opens the part)           |
- * | `block_stopped`           | nothing (`item_completed` closes the part)         |
+ * | `block_started` thinking  | `reasoning-start` (the part opens where the block did) |
+ * | `block_stopped` thinking  | `reasoning-end`                                    |
+ * | `block_started`/`stopped` text | nothing (the deltas open it, `item_completed` closes it) |
  * | `notice`                  | `data-notice`                                      |
  * | `error`                   | `error` (`errorText`)                              |
  * | `run_finished`, run end   | `finish` (then `data: [DONE]`, added by `sse.ts`)  |
@@ -55,6 +56,19 @@
  * once. With them, the deltas carry the text and `item_completed` only ends
  * the part. A consumer uses one or the other, never both (see core's
  * `TextDeltaEvent` docs).
+ *
+ * Thinking parts have a third case the deltas path cannot cover: the provider
+ * may stream the block's signature only (`thinking.display: "omitted"`, the
+ * server default for some models), so no `thinking_delta` ever arrives for a
+ * block that really happened. Core reports that block through
+ * `block_started`/`block_stopped` (with `emitDeltas`) and through
+ * `item_completed` thinking — but the item events are emitted at the END of
+ * the turn, after all the text. Opening the part at `item_completed` alone
+ * would therefore render the thought below its own answer. The adapter opens
+ * it at `block_started` and closes it at `block_stopped`, which is where the
+ * block really was, and `item_completed` thinking only closes a part that is
+ * still open (the path with no edges at all). The part is kept even when its
+ * text is empty: the web UI shows it as a "Thought" line.
  *
  * @module chat-stream/adapter
  */
@@ -89,7 +103,7 @@ export interface ChatStreamState {
   readonly openReasoning: string | null
   /** The current step had `text_delta` events. */
   readonly streamedText: boolean
-  /** The current step had `thinking_delta` events. */
+  /** The current step already opened its reasoning part (deltas or a block edge). */
   readonly streamedReasoning: boolean
   /** Stop reason of the last completed turn, or `undefined` if none completed. */
   readonly lastStopReason: StopReason | null | undefined
@@ -195,9 +209,27 @@ function mapAgentEvent(draft: Draft, event: AgentEvent, chunks: UiMessageChunk[]
       // The matching item_completed carries everything this event does.
       return
     case "block_started":
+      // A thinking block opens its part HERE, not at `item_completed`. Core
+      // emits `item_completed` at the end of the turn, so a block whose
+      // plaintext never streams (provider `display: "omitted"`: the signature
+      // is the whole block) would otherwise open after the turn's text and
+      // render below its own answer. `item_completed` then only closes it.
+      // A text block keeps its old path: its deltas open the part, and
+      // `item_completed` closes it.
+      if (event.itemType !== "thinking") return
+      openStep(draft, chunks)
+      if (draft.openReasoning === event.id) return
+      closeReasoning(draft, chunks)
+      chunks.push({ type: "reasoning-start", id: event.id })
+      draft.openReasoning = event.id
+      // The edge opened this block's part: `item_completed` must not add a
+      // second one, whether or not deltas follow.
+      draft.streamedReasoning = true
+      return
     case "block_stopped":
-      // The first delta of a block already opens its part, and item_completed
-      // closes it. A part opened or closed here too would be sent twice.
+      // Same pairing as the reasoning deltas: the block edge that matches the
+      // open part closes it. A text block's part closes at `item_completed`.
+      if (event.itemType === "thinking") closeReasoning(draft, chunks)
       return
     case "item_completed":
       openStep(draft, chunks)

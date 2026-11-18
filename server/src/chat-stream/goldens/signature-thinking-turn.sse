@@ -1,0 +1,40 @@
+data: {"type":"start","messageId":"msg-signature-thinking"}
+
+data: {"type":"start-step"}
+
+data: {"type":"reasoning-start","id":"1:thinking"}
+
+data: {"type":"reasoning-end","id":"1:thinking"}
+
+data: {"type":"tool-input-available","toolCallId":"toolu_01","toolName":"WebSearch","input":null,"dynamic":true}
+
+data: {"type":"tool-input-available","toolCallId":"toolu_01","toolName":"WebSearch","input":{"query":"latest news today"},"dynamic":true}
+
+data: {"type":"tool-output-available","toolCallId":"toolu_01","output":{"isError":false,"summary":"5 results","durationMs":811},"dynamic":true}
+
+data: {"type":"data-usage","data":{"kind":"turn","turn":1,"usage":{"inputTokens":4,"outputTokens":177,"reasoningTokens":63}}}
+
+data: {"type":"finish-step"}
+
+data: {"type":"start-step"}
+
+data: {"type":"reasoning-start","id":"2:thinking"}
+
+data: {"type":"reasoning-end","id":"2:thinking"}
+
+data: {"type":"text-start","id":"2:text"}
+
+data: {"type":"text-delta","id":"2:text","delta":"Here are the top"}
+
+data: {"type":"text-delta","id":"2:text","delta":" news items."}
+
+data: {"type":"text-end","id":"2:text"}
+
+data: {"type":"data-usage","data":{"kind":"turn","turn":2,"usage":{"inputTokens":2,"outputTokens":428,"reasoningTokens":63}}}
+
+data: {"type":"finish-step"}
+
+data: {"type":"finish","finishReason":"stop"}
+
+data: [DONE]
+

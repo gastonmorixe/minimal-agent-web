@@ -152,29 +152,139 @@ describe("mapChatStreamInput", () => {
     expect(retryBoundaryText(3)).toBe("\n↳ stream stalled — retrying (attempt 3)…\n")
   })
 
-  test("sends nothing for block_started and block_stopped", () => {
-    const inputs = events(
-      { type: "turn_started", turn: 1 },
-      { type: "block_started", itemType: "thinking", id: "1:thinking" },
-      { type: "thinking_delta", id: "1:thinking", text: "hm" },
-      { type: "block_stopped", itemType: "thinking", id: "1:thinking" },
-      { type: "block_started", itemType: "text", id: "1:text" },
-      { type: "text_delta", id: "1:text", text: "Hi." },
-      { type: "block_stopped", itemType: "text", id: "1:text" },
-      { type: "item_completed", itemType: "thinking", id: "1:0", text: "hm" },
-      { type: "item_completed", itemType: "text", id: "1:1", text: "Hi." },
+  test("a thinking block with no deltas opens its part at the edge, above the answer", () => {
+    // A signature-only thinking block (provider `display: "omitted"`): the
+    // block edges arrive, no `thinking_delta` ever does, and `item_completed`
+    // thinking lands at the END of the turn, after all the text. The part must
+    // still open where the block opened, or it renders below the answer.
+    const chunks = mapAll(
+      events(
+        { type: "turn_started", turn: 1 },
+        { type: "block_started", itemType: "thinking", id: "1:thinking" },
+        { type: "block_stopped", itemType: "thinking", id: "1:thinking" },
+        { type: "block_started", itemType: "text", id: "1:text" },
+        { type: "text_delta", id: "1:text", text: "The answer." },
+        { type: "block_stopped", itemType: "text", id: "1:text" },
+        { type: "item_started", itemType: "thinking", id: "1:0" },
+        { type: "item_completed", itemType: "thinking", id: "1:0", text: "" },
+        { type: "item_started", itemType: "text", id: "1:1" },
+        { type: "item_completed", itemType: "text", id: "1:1", text: "The answer." },
+      ),
     )
-    const withoutEdges = inputs.filter(
-      (input) =>
-        input.kind !== "event" ||
-        (input.event.type !== "block_started" && input.event.type !== "block_stopped"),
+    expect(chunks).toEqual([
+      { type: "start" },
+      { type: "start-step" },
+      { type: "reasoning-start", id: "1:thinking" },
+      { type: "reasoning-end", id: "1:thinking" },
+      { type: "text-start", id: "1:text" },
+      { type: "text-delta", id: "1:text", delta: "The answer." },
+      { type: "text-end", id: "1:text" },
+    ])
+  })
+
+  test("an empty thinking block keeps its part, with no delta", () => {
+    // The web UI renders a `reasoning` part even when its text is "", so an
+    // empty thought is a visible "Thought" line. It must not be dropped.
+    const chunks = mapAll(
+      events(
+        { type: "turn_started", turn: 1 },
+        { type: "block_started", itemType: "thinking", id: "1:thinking" },
+        { type: "block_stopped", itemType: "thinking", id: "1:thinking" },
+        { type: "item_completed", itemType: "thinking", id: "1:0", text: "" },
+      ),
     )
-    const chunks = mapAll(inputs)
-    expect(chunks).toEqual(mapAll(withoutEdges))
-    expect(chunks.filter((chunk) => chunk.type === "reasoning-start")).toHaveLength(1)
-    expect(chunks.filter((chunk) => chunk.type === "reasoning-end")).toHaveLength(1)
-    expect(chunks.filter((chunk) => chunk.type === "text-start")).toHaveLength(1)
-    expect(chunks.filter((chunk) => chunk.type === "text-end")).toHaveLength(1)
+    expect(chunks.filter((chunk) => chunk.type === "reasoning-start")).toEqual([
+      { type: "reasoning-start", id: "1:thinking" },
+    ])
+    expect(chunks.filter((chunk) => chunk.type === "reasoning-delta")).toEqual([])
+  })
+
+  test("each turn's delta-less thought renders above that turn's own text", () => {
+    // The real two-turn shape of session session-1: a thought with no
+    // plaintext, a tool round, then a second thought with no plaintext and the
+    // answer. Two turns must not collapse into one part, and the second part
+    // must not land after the answer.
+    const chunks = mapAll(
+      events(
+        { type: "turn_started", turn: 1 },
+        { type: "block_started", itemType: "thinking", id: "1:thinking" },
+        { type: "block_stopped", itemType: "thinking", id: "1:thinking" },
+        { type: "item_completed", itemType: "thinking", id: "1:0", text: "" },
+        { type: "tool_call", callId: "t1", toolName: "WebSearch", input: {}, inputSummary: "q" },
+        {
+          type: "turn_completed",
+          turn: 1,
+          stopReason: "tool_use",
+          usage: { inputTokens: 4, outputTokens: 177 },
+        },
+        { type: "turn_started", turn: 2 },
+        { type: "block_started", itemType: "thinking", id: "2:thinking" },
+        { type: "block_stopped", itemType: "thinking", id: "2:thinking" },
+        { type: "block_started", itemType: "text", id: "2:text" },
+        { type: "text_delta", id: "2:text", text: "Here are the news." },
+        { type: "block_stopped", itemType: "text", id: "2:text" },
+        { type: "item_completed", itemType: "thinking", id: "2:0", text: "" },
+        { type: "item_completed", itemType: "text", id: "2:1", text: "Here are the news." },
+        {
+          type: "turn_completed",
+          turn: 2,
+          stopReason: "end_turn",
+          usage: { inputTokens: 2, outputTokens: 428 },
+        },
+      ),
+    )
+    const order = chunks.map((chunk) => ("id" in chunk ? `${chunk.type}:${chunk.id}` : chunk.type))
+    expect(order.filter((entry) => entry.startsWith("reasoning-start:"))).toEqual([
+      "reasoning-start:1:thinking",
+      "reasoning-start:2:thinking",
+    ])
+    const secondReasoning = order.indexOf("reasoning-start:2:thinking")
+    const answer = order.indexOf("text-delta:2:text")
+    expect(secondReasoning).toBeGreaterThan(-1)
+    expect(secondReasoning).toBeLessThan(answer)
+  })
+
+  test("block edges and deltas converge on one thinking part with the streaming id", () => {
+    // The edge opens the part, the deltas fill it, the matching edge closes it,
+    // and `item_completed` adds nothing. Without the edges the same test opens
+    // and closes at `item_completed` under the item id; the parts are equal in
+    // count, so neither path can double-open.
+    const withEdges = mapAll(
+      events(
+        { type: "turn_started", turn: 1 },
+        { type: "block_started", itemType: "thinking", id: "1:thinking" },
+        { type: "thinking_delta", id: "1:thinking", text: "hm" },
+        { type: "block_stopped", itemType: "thinking", id: "1:thinking" },
+        { type: "block_started", itemType: "text", id: "1:text" },
+        { type: "text_delta", id: "1:text", text: "Hi." },
+        { type: "block_stopped", itemType: "text", id: "1:text" },
+        { type: "item_completed", itemType: "thinking", id: "1:0", text: "hm" },
+        { type: "item_completed", itemType: "text", id: "1:1", text: "Hi." },
+      ),
+    )
+    const withoutEdges = mapAll(
+      events(
+        { type: "turn_started", turn: 1 },
+        { type: "thinking_delta", id: "1:thinking", text: "hm" },
+        { type: "text_delta", id: "1:text", text: "Hi." },
+        { type: "item_completed", itemType: "thinking", id: "1:0", text: "hm" },
+        { type: "item_completed", itemType: "text", id: "1:1", text: "Hi." },
+      ),
+    )
+    for (const chunks of [withEdges, withoutEdges]) {
+      expect(chunks.filter((chunk) => chunk.type === "reasoning-start")).toHaveLength(1)
+      expect(chunks.filter((chunk) => chunk.type === "reasoning-end")).toHaveLength(1)
+      expect(chunks.filter((chunk) => chunk.type === "text-start")).toHaveLength(1)
+      expect(chunks.filter((chunk) => chunk.type === "text-end")).toHaveLength(1)
+    }
+    // The edge path keeps the streaming id, so the part and its deltas share one id.
+    expect(withEdges.filter((chunk) => chunk.type === "reasoning-start")).toEqual([
+      { type: "reasoning-start", id: "1:thinking" },
+    ])
+    // A text block's edges never emit: its part is the deltas' and `item_completed`'s.
+    expect(withEdges.filter((chunk) => chunk.type === "text-start")).toEqual(
+      withoutEdges.filter((chunk) => chunk.type === "text-start"),
+    )
   })
 
   test("maps a failed tool to tool-output-error", () => {
