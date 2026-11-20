@@ -331,6 +331,10 @@ export async function providerParts(
       // B1: the runtime has no loader, so pass the loader's text providers.
       syntheticTextProviders: host.loader.syntheticTextProviders(),
       toolTextProviders: host.loader.toolTextProviders(),
+      // The one sideband API of the loader (design step 5): the session core
+      // renders the session context, turn hook policy, wrap-up and
+      // turn.willStop notes with it. Without it the core has NO_SIDEBAND.
+      sideband: host.loader.sideband(),
     },
   }
 }
