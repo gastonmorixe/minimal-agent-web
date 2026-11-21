@@ -10,7 +10,7 @@
     "id": "stub",
     "entry": "./provider.ts",
     "identity": true,
-    "slots": ["instructions", "toolOutputConventions"]
+    "slots": ["instructions"]
   },
   "toolText": [
     {
