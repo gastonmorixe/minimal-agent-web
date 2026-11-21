@@ -36,7 +36,7 @@
     "commitlint:last": "commitlint --last --verbose"
   },
   "dependencies": {
-    "@minimal-agent/core": "git+ssh://git@github.com/gastonmorixe/minimal-agent-core.git#7a4740959ead24b010bfae2415f9120152ecc174"
+    "@minimal-agent/core": "git+ssh://git@github.com/gastonmorixe/minimal-agent-core.git#ff7bedae44ce8b3b7bd704809ed1b68036056c08"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.6",
