@@ -34,11 +34,6 @@ export class LiveToolExecutor implements ToolExecutor {
     this.current()
   }
 
-  /** True when the executor of the live model writes raw-output blobs. */
-  get blobStoreEnabled(): boolean {
-    return this.current().blobStoreEnabled === true
-  }
-
   /** Run one tool call on the executor of the live model. */
   execute(...args: Parameters<ToolExecutor["execute"]>): ReturnType<ToolExecutor["execute"]> {
     return this.current().execute(...args)

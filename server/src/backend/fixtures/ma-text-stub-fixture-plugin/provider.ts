@@ -8,9 +8,9 @@
 
 import manifest from "./manifest.json" with { type: "json" }
 
-const SLOTS = ["instructions", "toolOutputConventions"] as const
+const SLOTS = ["instructions"] as const
 
-/** The system prompt base provider: identity and the 2 slots. */
+/** The system prompt base provider: identity and the instructions slot. */
 export default function createBase() {
   return {
     slots: SLOTS,
