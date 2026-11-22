@@ -170,7 +170,19 @@ function fail(message: string, code: number): never {
 async function bootOrExit(): Promise<BootedHost> {
   let host: BootedHost
   try {
-    host = await bootHost({ ...pluginRoots(), ...WEB_BOOT_CONTRACTS, version: VERSION })
+    host = await bootHost({
+      ...pluginRoots(),
+      ...WEB_BOOT_CONTRACTS,
+      version: VERSION,
+      // The session plugins (`sessions:files`, `sessions:meta`) keep their
+      // files next to the web sessions. With no persist dir the sessions are
+      // memory only: `null` grants neither capability, and core emits one
+      // `host.sessions-files` warning for each plugin that declares one.
+      sessionsDir: persistDir ?? null,
+      // A plugin can touch only a live session of this server. Core reads the
+      // rule at call time, so a session that opens after the boot is owned.
+      isOwnedSession: (sid) => liveSessionIds.has(sid),
+    })
   } catch (error) {
     fail(`boot failed: ${bootErrorText(error)}`, 2)
   }
@@ -201,7 +213,12 @@ try {
 // A worker that a plugin starts must be a CLI process, not this server.
 publishAgentBin({ installDir: INSTALL_DIR })
 const scripted = process.env.MA_WEB_SCRIPTED === "1"
-const persistDir = process.env.MA_WEB_PERSIST_DIR
+// An empty value is the same as no value: memory only.
+const persistDir = process.env.MA_WEB_PERSIST_DIR || undefined
+// The live session ids. The host boots before the backend exists, so this set
+// is made here and given to both: the backend fills it, and the host boot
+// reads it as its `isOwnedSession` rule.
+const liveSessionIds = new Set<string>()
 const retryCeilingMs = numberFromEnv("MA_WEB_RETRY_CEILING_MS")
 const scriptStepDelayMs = numberFromEnv("MA_WEB_SCRIPT_STEP_MS")
 const backend = new RuntimeBackend({
@@ -214,7 +231,8 @@ const backend = new RuntimeBackend({
         sendFn: () => createScriptedTransport({ stepDelayMs: scriptStepDelayMs }),
       }
     : { host: await bootOrExit() }),
-  ...(persistDir === "" ? {} : { persistDir }),
+  ...(persistDir === undefined ? {} : { persistDir }),
+  liveSessionIds,
   ...(retryCeilingMs === undefined ? {} : { retryCeilingMs }),
 })
 const token = process.env.MA_WEB_TOKEN || createToken()

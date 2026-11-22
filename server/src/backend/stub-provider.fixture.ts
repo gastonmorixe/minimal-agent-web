@@ -88,6 +88,8 @@ export interface StubProviderOptions {
   targetModels?: boolean
   /** The tool that the first answer calls, with no input. Default: `Read` of {@link StubProviderHome.readPath}. */
   toolName?: string
+  /** Also write the request `messages` to the request log. Default `false`. */
+  recordMessages?: boolean
 }
 
 /**
@@ -153,6 +155,7 @@ export function writeStubProviderHome(
       targetModels:
         options.targetModels === true ? { plainModelId, limitedModelId, noEffortModelId } : null,
       toolName: options.toolName ?? null,
+      recordMessages: options.recordMessages === true,
     }),
   )
   return {
@@ -222,6 +225,7 @@ interface StubEntryInput {
   requestLog: string
   targetModels: { plainModelId: string; limitedModelId: string; noEffortModelId: string } | null
   toolName: string | null
+  recordMessages: boolean
 }
 
 /** Source of the stub provider entry file. */
@@ -267,7 +271,7 @@ async function* run(req, _model, ctx) {
   appendFileSync(${q(authLog)}, JSON.stringify(ctx.auth) + "\\n")
   appendFileSync(
     ${q(requestLog)},
-    JSON.stringify({ modelId: req.modelId, effort: req.effort, auth: ctx.auth }) + "\\n",
+    JSON.stringify({ modelId: req.modelId, effort: req.effort, auth: ctx.auth${input.recordMessages ? ", messages: req.messages" : ""} }) + "\\n",
   )
   if (LIMITED !== "" && req.modelId === LIMITED) {
     // As a 429 with Retry-After: a transient error with a wait of one hour.

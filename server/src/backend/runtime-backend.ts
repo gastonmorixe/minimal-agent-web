@@ -137,6 +137,15 @@ export interface RuntimeBackendOptions {
   /** Persist sessions to disk (core's real `SessionStore` + durable event log). Default: memory only. */
   persistDir?: string
   /**
+   * The ids of the live sessions of this backend. The backend adds each new
+   * session id and clears the set on {@link RuntimeBackend.close}. The host
+   * boot reads the same set as its `isOwnedSession` rule, so a plugin with
+   * `sessions:files` or `sessions:meta` can touch only a session of this
+   * process. `main.ts` makes the set, because the host boots before the
+   * backend exists. Default: a private set.
+   */
+  liveSessionIds?: Set<string>
+  /**
    * Retry backoff ceiling for every session, in ms. Default
    * {@link DEFAULT_RETRY_CEILING_MS}: core's own default (60 s) is tuned for
    * a real network call, far too slow for the scripted "retry" / "quota"
@@ -353,6 +362,8 @@ export class RuntimeBackend implements SessionBackend {
   private readonly retryCeilingMs: number | undefined
   private readonly now: () => number
   private readonly sessions = new Map<string, SessionState>()
+  /** See {@link RuntimeBackendOptions.liveSessionIds}. */
+  private readonly liveSessionIds: Set<string>
   private readonly version: string
 
   /**
@@ -369,6 +380,7 @@ export class RuntimeBackend implements SessionBackend {
     this.transport = options.host ? providerTransport(options.host) : SCRIPTED_TRANSPORT
     this.sendFnFactory = options.sendFn ?? (() => createScriptedTransport())
     this.persistDir = options.persistDir
+    this.liveSessionIds = options.liveSessionIds ?? new Set()
     this.cwd = process.cwd()
     this.retryCeilingMs = options.retryCeilingMs ?? DEFAULT_RETRY_CEILING_MS
     this.now = options.now ?? Date.now
@@ -475,6 +487,7 @@ export class RuntimeBackend implements SessionBackend {
       targetQueue: Promise.resolve(),
     }
     this.sessions.set(id, state)
+    this.liveSessionIds.add(id)
     return this.summarize(state)
   }
 
@@ -586,6 +599,7 @@ export class RuntimeBackend implements SessionBackend {
   /** Close the runtime: every open session stops. */
   close(): void {
     this.runtime.close()
+    this.liveSessionIds.clear()
   }
 
   /** Scripted mode: the scripted transport, placeholder auth and context window. */
