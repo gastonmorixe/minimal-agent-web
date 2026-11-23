@@ -59,6 +59,7 @@
 import { existsSync, readdirSync, statSync } from "node:fs"
 import { dirname, join } from "node:path"
 
+import { defaultBinDir } from "@minimal-agent/core/host/binaries"
 import {
   type BootedHost,
   bootHost,
@@ -212,6 +213,12 @@ try {
 
 // A worker that a plugin starts must be a CLI process, not this server.
 publishAgentBin({ installDir: INSTALL_DIR })
+// Plugins find their managed binaries (for example the Fetch browser) here.
+// The CLI sets the same value (minimal-agent-cli session-env.ts). Without it,
+// a tool whose binary resolves from this dir stays hidden from the model.
+if (!process.env.MINIMAL_AGENT_BIN_DIR?.trim()) {
+  process.env.MINIMAL_AGENT_BIN_DIR = defaultBinDir()
+}
 const scripted = process.env.MA_WEB_SCRIPTED === "1"
 // An empty value is the same as no value: memory only.
 const persistDir = process.env.MA_WEB_PERSIST_DIR || undefined
