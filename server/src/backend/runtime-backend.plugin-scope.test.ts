@@ -2,7 +2,7 @@
  * Two web sessions in one server process: a plugin tool of each session sees
  * THAT session, not the boot values of the process.
  *
- * Alex (11-18), the capture `session-web-tools-wrong-info`: session-1 ran
+ * Owner (11-18), the capture `session-web-tools-wrong-info`: session-1 ran
  * anthropic / claude-haiku-5-5, session-2 ran cursor / cursor-auto. In
  * session-2, ModelInfo and SessionInfo reported the boot default model
  * (deepseek-v4.1-flash / opencode-zen), the process sid or "unknown", the
